@@ -1,5 +1,9 @@
 
 from datetime import datetime,timedelta
+from typing import Any, List, Dict, Optional
+from datetime import datetime, timedelta, time
+import numpy as np
+import pandas as pd
 
 class TradingStrategy:
     """
@@ -702,3 +706,103 @@ class TradingStrategy:
 
 # 创建全局策略实例，策略入口处使用该实例
 strategy = TradingStrategy()
+
+
+# 全局包装函数，必须为顶层函数，保证调度任务可序列化，不使用 lambda
+
+def prepare_stock_list_func(context: Any) -> None:
+    """
+    包装调用策略实例的 prepare_stock_list 方法
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    strategy.prepare_stock_list(context)
+
+
+def check_holdings_yesterday_func(context: Any) -> None:
+    """
+    包装调用策略实例的 check_holdings_yesterday 方法
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    strategy.check_holdings_yesterday(context)
+
+
+def weekly_adjustment_func(context: Any) -> None:
+    """
+    包装调用策略实例的 weekly_adjustment 方法
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    strategy.weekly_adjustment(context)
+
+
+def sell_stocks_func(context: Any) -> None:
+    """
+    包装调用策略实例的 sell_stocks 方法
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    strategy.sell_stocks(context)
+
+
+def trade_afternoon_func(context: Any) -> None:
+    """
+    包装调用策略实例的 trade_afternoon 方法
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    strategy.trade_afternoon(context)
+
+
+def close_account_func(context: Any) -> None:
+    """
+    包装调用策略实例的 close_account 方法
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    strategy.close_account(context)
+
+
+def print_position_info_func(context: Any) -> None:
+    """
+    包装调用策略实例的 print_position_info 方法
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    strategy.print_position_info(context)
+
+
+def initialize(context: Any) -> None:
+    """
+    聚宽平台的全局初始化函数
+
+    该函数用于：
+      1. 调用策略实例的 initialize 方法配置交易环境；
+      2. 通过全局包装函数注册各项调度任务（每天或每周定时运行）。
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    # 初始化策略环境及参数
+    strategy.initialize(context)
+    
+    # context.run_time("prepare_stock_list_func","1nDay","1970-01-0100:00:00","SH")
+
+    # 注册调度任务，所有任务均使用顶层包装函数（不使用 lambda 以确保可序列化）
+    run_daily(prepare_stock_list_func, time='9:05')
+    run_daily(check_holdings_yesterday_func, time='9:00')
+    # run_weekly 的第二个参数为星期几（例如 2 表示星期二），以位置参数传入
+    run_weekly(weekly_adjustment_func, 2, time='10:30')
+    run_daily(sell_stocks_func, time='10:00')
+    run_daily(trade_afternoon_func, time='14:30')
+    run_daily(close_account_func, time='14:50')
+    # run_weekly 的星期参数，此处传入 5 表示星期五
+    run_weekly(print_position_info_func, 5, time='15:10')
