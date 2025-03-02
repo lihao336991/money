@@ -1,4 +1,5 @@
 
+#coding:gbk
 from datetime import datetime,timedelta
 from typing import Any, List, Dict, Optional
 from datetime import datetime, timedelta, time
@@ -199,7 +200,7 @@ class TradingStrategy:
         context.today = datetime.datetime.fromtimestamp(currentTime).strftime('%Y-%m-%d')
         
     def get_stock_pool(self, context: Any) -> List[str]:
-        return context.get_sector('399101.XSHE')
+        return context.get_stock_list_in_sector('中小综指')
 
     # Position的完整品种代码
     def codeOfPosition(position):
@@ -793,16 +794,39 @@ def initialize(context: Any) -> None:
     """
     # 初始化策略环境及参数
     strategy.initialize(context)
-    
-    # context.run_time("prepare_stock_list_func","1nDay","1970-01-0100:00:00","SH")
 
     # 注册调度任务，所有任务均使用顶层包装函数（不使用 lambda 以确保可序列化）
-    run_daily(prepare_stock_list_func, time='9:05')
-    run_daily(check_holdings_yesterday_func, time='9:00')
-    # run_weekly 的第二个参数为星期几（例如 2 表示星期二），以位置参数传入
-    run_weekly(weekly_adjustment_func, 2, time='10:30')
-    run_daily(sell_stocks_func, time='10:00')
-    run_daily(trade_afternoon_func, time='14:30')
-    run_daily(close_account_func, time='14:50')
-    # run_weekly 的星期参数，此处传入 5 表示星期五
-    run_weekly(print_position_info_func, 5, time='15:10')
+    
+    # -------------------每日执行任务 --------------------------------
+    # 9am 检查昨日持仓
+    # run_daily(check_holdings_yesterday_func, time='9:00')
+    context.run_time("check_holdings_yesterday_func","1nDay","2025-03-0109:00:00","SH")
+
+    # 9:05am 准备股票列表
+    #run_daily(prepare_stock_list_func, time='9:05')
+    context.run_time("prepare_stock_list_func","1nDay","2025-03-0109:05:00","SH")
+
+
+    # 10:00 am 检查需要卖出的持仓
+    #run_daily(sell_stocks_func, time='10:00')
+    context.run_time("sell_stocks_func","1nDay","2025-03-0110:00:00","SH")
+
+    # 14:30 pm 检查需要卖出的持仓
+    # run_daily(trade_afternoon_func, time='14:30')
+    context.run_time("trade_afternoon_func","1nDay","2025-03-0114:30:00","SH")
+
+    # 14:50 pm 检查当日是否需要一键清仓
+    # run_daily(close_account_func, time='14:50')
+    context.run_time("close_account_func","1nDay","2025-03-0114:50:00","SH")
+
+
+    # 15:05 pm 每日收盘后打印一次持仓
+    # run_weekly(print_position_info_func, 5, time='15:05')
+    context.run_time("print_position_info_func","1nDay","2025-03-0115:05:00","SH")
+
+
+    # -------------------每周执行任务 --------------------------------
+
+    # 每周做一次调仓动作
+    # run_weekly(weekly_adjustment_func, 2, time='10:30')
+    context.run_time("weekly_adjustment_func","7nDay","2025-03-0410:30:00","SH")
