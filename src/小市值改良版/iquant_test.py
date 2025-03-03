@@ -9,6 +9,13 @@ from datetime import datetime, timedelta, time
 import numpy as np
 import pandas as pd
 
+class Log:
+    def debug(*args):
+        print(*args)
+    def error(*args):
+        print('[log error]', *args)
+log = Log()
+
 class TradingStrategy:
     """
     交易策略类
@@ -121,15 +128,14 @@ class TradingStrategy:
 
         此方法只做了日志打印，因此初始版本不要也罢，后续再完善。
         """
-        log.info("检查每只持仓股票昨日交易数据——此功能待实现")
         # 这里给context挂一个positions持仓对象，仅盘前可以复用，盘中要实时取数据不能使用这个
-        context.positions = context.get_trade_detail_data(context.account, context.accountType, 'position')
-
+        context.positions = get_trade_detail_data(context.account, context.accountType, 'position')
+        
         # if not positions:
-        #     log.info("昨日没有持仓数据。")
+        #     print("昨日没有持仓数据。")
         #     return
 
-        # log.info("检查每只持仓股票昨日交易数据：")
+        # print("检查每只持仓股票昨日交易数据：")
         # for position in positions.items():
         #     stock = self.codeOfPosition(position)
         #     try:
@@ -143,12 +149,12 @@ class TradingStrategy:
         #             panel=False
         #         )
         #         if df is None or df.empty:
-        #             log.info(f"无法获取股票 {stock} 的昨日数据。")
+        #             print(f"无法获取股票 {stock} 的昨日数据。")
         #             continue
         #         open_price: float = df.iloc[0]['open']
         #         close_price: float = df.iloc[0]['close']
         #         change_pct: float = (close_price / open_price - 1) * 100
-        #         log.info(f"股票 {stock}：持仓 {position.total_amount} 股，开盘价 {open_price:.2f}，收盘价 {close_price:.2f}，涨跌幅 {change_pct:.2f}%")
+        #         print(f"股票 {stock}：持仓 {position.total_amount} 股，开盘价 {open_price:.2f}，收盘价 {close_price:.2f}，涨跌幅 {change_pct:.2f}%")
         #     except Exception as e:
         #         log.error(f"处理股票 {stock} 数据时出错: {e}")
 
@@ -190,17 +196,22 @@ class TradingStrategy:
         参数:
             context: 聚宽平台传入的交易上下文对象
         """
-        # 从当前持仓中提取股票代码，更新持仓列表
-        self.hold_list = [self.codeOfPosition(position) for position in list(context.positions.values())]
-        # 取出涨停列表
-        self.yesterday_HL_list = self.find_limit_list(self.hold_list).high_list
-        # 根据当前日期判断是否为空仓日（例如04月或01月时资金再平衡）
-        self.no_trading_today_signal = self.today_is_between(context)
+        print("更新持仓股票列表和昨日涨停股票列表")
+
         # 新增属性，快捷获取当前日期
         index = context.barpos
         currentTime = context.get_bar_timetag(index) / 1000
         context.currentTime = currentTime
         context.today = datetime.fromtimestamp(currentTime).strftime('%Y-%m-%d')
+
+        # 从当前持仓中提取股票代码，更新持仓列表
+        if context.positions:
+            print(context.positions, 'context.positions222')
+            self.hold_list = [self.codeOfPosition(position) for position in list(context.positions.values())]
+            # 取出涨停列表
+            self.yesterday_HL_list = self.find_limit_list(self.hold_list).high_list
+            # 根据当前日期判断是否为空仓日（例如04月或01月时资金再平衡）
+            self.no_trading_today_signal = self.today_is_between(context)
         
     def get_stock_pool(self, context: Any) -> List[str]:
         return context.get_stock_list_in_sector('中小综指')
@@ -220,7 +231,7 @@ class TradingStrategy:
             筛选后的候选股票代码列表
         """
         # 从指定指数中获取初步股票列表
-        initial_list: self.get_stock_pool(context)
+        initial_list = self.get_stock_pool(context)
 
         # 依次应用过滤器，筛去不符合条件的股票
         initial_list = self.filter_new_stock(context, initial_list)   # 过滤次新股
@@ -262,7 +273,7 @@ class TradingStrategy:
         stock_list = stock_list[:100]  # 限制数据规模，防止一次处理数据过大
         # 取前2倍目标持仓股票数作为候选池
         final_list: List[str] = stock_list[:2 * self.stock_num]
-        log.info(f"初选候选股票: {final_list}")
+        print(f"初选候选股票: {final_list}")
 
         # 下面注释部分不参与实际功能，只是日志打印，暂时忽略
         # 查询并输出候选股票的财务信息（如财报日期、营业收入、EPS）
@@ -276,7 +287,7 @@ class TradingStrategy:
         #     ).filter(valuation.code.in_(final_list))
         #     df_info = get_fundamentals(info_query)
         #     for _, row in df_info.iterrows():
-        #         log.info(f"股票 {row['code']}：报告日期 {row.get('pubDate', 'N/A')}，统计日期 {row.get('statDate', 'N/A')}，营业收入 {row.get('operating_revenue', 'N/A')}，EPS {row.get('eps', 'N/A')}")
+        #         print(f"股票 {row['code']}：报告日期 {row.get('pubDate', 'N/A')}，统计日期 {row.get('statDate', 'N/A')}，营业收入 {row.get('operating_revenue', 'N/A')}，EPS {row.get('eps', 'N/A')}")
         return final_list
 
     def weekly_adjustment(self, context: Any) -> None:
@@ -291,16 +302,16 @@ class TradingStrategy:
             self.target_list = self.get_stock_list(context)
             # 取目标持仓数以内的股票作为调仓目标
             target_list: List[str] = self.target_list[:self.stock_num]
-            log.info(f"每周调仓目标股票: {target_list}")
+            print(f"每周调仓目标股票: {target_list}")
 
             # 遍历当前持仓，若股票不在目标列表且非昨日涨停，则执行卖出操作
             for stock in self.hold_list:
                 if stock not in target_list and stock not in self.yesterday_HL_list:
-                    log.info(f"卖出股票 {stock}")
+                    print(f"卖出股票 {stock}")
                     position = context.positions[stock]
                     self.close_position(context, position)
                 else:
-                    log.info(f"持有股票 {stock}")
+                    print(f"持有股票 {stock}")
 
             # 对目标股票执行买入操作
             self.buy_security(context, target_list)
@@ -323,12 +334,12 @@ class TradingStrategy:
                 high_limit = self.get_limit_of_stock(stock, lastClose)[0]
 
                 if price < high_limit:
-                    log.info(f"股票 {stock} 涨停破板，触发卖出操作。")
+                    print(f"股票 {stock} 涨停破板，触发卖出操作。")
                     position = context.positions[stock]
                     self.close_position(context, position)
                     self.reason_to_sell = 'limitup'
                 else:
-                    log.info(f"股票 {stock} 仍维持涨停状态。")
+                    print(f"股票 {stock} 仍维持涨停状态。")
     
     def check_remain_amount(self, context: Any) -> None:
         """
@@ -341,11 +352,11 @@ class TradingStrategy:
             if len(self.hold_list) < self.stock_num:
                 target_list = self.filter_not_buy_again(self.target_list)
                 target_list = target_list[:min(self.stock_num, len(target_list))]
-                log.info(f"检测到补仓需求，可用资金 {round(context.accountInfo.m_dAvailable, 2)}，候选补仓股票: {target_list}")
+                print(f"检测到补仓需求，可用资金 {round(context.accountInfo.m_dAvailable, 2)}，候选补仓股票: {target_list}")
                 self.buy_security(context, target_list)
             self.reason_to_sell = ''
         else:
-            log.info("未检测到涨停破板卖出事件，不进行补仓买入。")
+            print("未检测到涨停破板卖出事件，不进行补仓买入。")
 
     def trade_afternoon(self, context: Any) -> None:
         """
@@ -375,41 +386,43 @@ class TradingStrategy:
         止盈与止损操作：
         根据策略（1: 个股止损；2: 大盘止损；3: 联合策略）判断是否执行卖出操作。
         """
-        if self.run_stoploss:
-            if self.stoploss_strategy == 1:
-                # 个股止盈或止损判断
-                for stock in list(context.positions.keys()):
-                    pos = context.positions[stock]
-                    if pos.m_dSettlementPrice >= pos.m_dOpenPrice * 2:
-                        order_target_value(stock, 0)
-                        log.debug(f"股票 {stock} 实现100%盈利，执行止盈卖出。")
-                    elif pos.m_dSettlementPrice < pos.m_dOpenPrice * self.stoploss_limit:
-                        order_target_value(stock, 0)
-                        log.debug(f"股票 {stock} 触及止损阈值，执行卖出。")
-                        self.reason_to_sell = 'stoploss'
-            elif self.stoploss_strategy == 2:
-                # 大盘止损判断，若整体市场跌幅过大则平仓所有股票
-                down_ratio = self.get_whole_market_data(context)
-                if down_ratio <= self.stoploss_market:
-                    self.reason_to_sell = 'stoploss'
-                    log.debug(f"市场检测到跌幅（平均跌幅 {down_ratio:.2%}），卖出所有持仓。")
-                    for stock in list(context.positions.keys()):
-                        order_target_value(stock, 0)
-            elif self.stoploss_strategy == 3:
-                # 联合止损策略：结合大盘和个股判断
-                down_ratio = self.get_whole_market_data(context)
-                if down_ratio <= self.stoploss_market:
-                    self.reason_to_sell = 'stoploss'
-                    log.debug(f"市场检测到跌幅（平均跌幅 {down_ratio:.2%}），卖出所有持仓。")
-                    for stock in list(context.positions.keys()):
-                        order_target_value(stock, 0)
-                else:
+        if context.positions:
+            print(context.positions, '——————————sell_stocks')
+            if self.run_stoploss:
+                if self.stoploss_strategy == 1:
+                    # 个股止盈或止损判断
                     for stock in list(context.positions.keys()):
                         pos = context.positions[stock]
-                        if pos.m_dSettlementPrice < pos.m_dOpenPrice * self.stoploss_limit:
+                        if pos.m_dSettlementPrice >= pos.m_dOpenPrice * 2:
                             order_target_value(stock, 0)
-                            log.debug(f"股票 {stock} 触及止损，执行卖出。")
+                            log.debug(f"股票 {stock} 实现100%盈利，执行止盈卖出。")
+                        elif pos.m_dSettlementPrice < pos.m_dOpenPrice * self.stoploss_limit:
+                            order_target_value(stock, 0)
+                            log.debug(f"股票 {stock} 触及止损阈值，执行卖出。")
                             self.reason_to_sell = 'stoploss'
+                elif self.stoploss_strategy == 2:
+                    # 大盘止损判断，若整体市场跌幅过大则平仓所有股票
+                    down_ratio = self.get_whole_market_data(context)
+                    if down_ratio <= self.stoploss_market:
+                        self.reason_to_sell = 'stoploss'
+                        log.debug(f"市场检测到跌幅（平均跌幅 {down_ratio:.2%}），卖出所有持仓。")
+                        for stock in list(context.positions.keys()):
+                            order_target_value(stock, 0)
+                elif self.stoploss_strategy == 3:
+                    # 联合止损策略：结合大盘和个股判断
+                    down_ratio = self.get_whole_market_data(context)
+                    if down_ratio <= self.stoploss_market:
+                        self.reason_to_sell = 'stoploss'
+                        log.debug(f"市场检测到跌幅（平均跌幅 {down_ratio:.2%}），卖出所有持仓。")
+                        for stock in list(context.positions.keys()):
+                            order_target_value(stock, 0)
+                    else:
+                        for stock in list(context.positions.keys()):
+                            pos = context.positions[stock]
+                            if pos.m_dSettlementPrice < pos.m_dOpenPrice * self.stoploss_limit:
+                                order_target_value(stock, 0)
+                                log.debug(f"股票 {stock} 触及止损，执行卖出。")
+                                self.reason_to_sell = 'stoploss'
 
     # 判断某只股票是否到达涨停
     def check_is_high_limit(self, context, stock):
@@ -456,7 +469,7 @@ class TradingStrategy:
             max_volume = self.get_max_volume_last_period(context, stock)['max_volume']
             cur_volume = self.get_max_volume_last_period(context, stock)['cur_volume']
             if cur_volume >  self.HV_ratio * max_volume:
-                log.info(f"检测到股票 {stock} 出现异常放量，执行卖出操作。")
+                print(f"检测到股票 {stock} 出现异常放量，执行卖出操作。")
                 position = context.positions[stock]
                 self.close_position(context, position)
 
@@ -539,9 +552,17 @@ class TradingStrategy:
         返回:
             过滤后的股票代码列表
         """
-        today = context.today
+        today = datetime.fromtimestamp(context.currentTime)
         yesterday = today - timedelta(days=1)
-        return [stock for stock in stock_list if not (yesterday - context.get_open_date(stock) < timedelta(days=375) and context.get_instrument_detail(stock).OpenDate == 19700101)]
+        def is_new_stock(stock):
+            try:
+                opendate = datetime.strptime(str(context.get_open_date(stock)), "%Y%m%d")
+                return yesterday - opendate < timedelta(days=375)
+            except Exception as e:
+                # 取不到数据的股票也是有问题的，可能是已退市，也当成新股过滤掉
+                # print(context.get_open_date(stock), '计算新股出错啦', stock)
+                return True
+        return [stock for stock in stock_list if not is_new_stock(stock)]
 
     def filter_highprice_stock(self, context: Any, stock_list: List[str]) -> List[str]:
         """
@@ -641,7 +662,7 @@ class TradingStrategy:
                 if context.positions[stock].m_nVolume == 0:
                     if self.open_position(stock, value):
                         # TODO 放在成交主推回调中实现
-                        log.info(f"已买入股票 {stock}，分配资金 {value:.2f}")
+                        print(f"已买入股票 {stock}，分配资金 {value:.2f}")
                         self.not_buy_again.append(stock)
                         if len(context.positions) == target_num:
                             break
@@ -679,7 +700,7 @@ class TradingStrategy:
                 for stock in self.hold_list:
                     position = context.positions[stock]
                     self.close_position(context, position)
-                    log.info(f"空仓日平仓，卖出股票 {stock}。")
+                    print(f"空仓日平仓，卖出股票 {stock}。")
 
     def print_position_info(self, context: Any) -> None:
         """
@@ -806,10 +827,13 @@ class DailyTask(ScheduledTask):
     """每日任务"""
     def should_trigger(self, current_dt):
         # 生成当日理论执行时间
-        theoretical_dt = datetime.combine(current_dt.date(), self.execution_time)
-        
+        should1 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
+        should2 = self.last_executed != current_dt.date()
+        should = should1 and should2
+        if should:
+            print('该执行日任务了', current_dt)
         # 当前时间已过执行时间 且 当日未执行
-        return current_dt >= theoretical_dt and self.last_executed != current_dt.date()
+        return should
 
 class WeeklyTask(ScheduledTask):
     """每周任务"""
@@ -818,13 +842,18 @@ class WeeklyTask(ScheduledTask):
         self.weekday = weekday  # 0-6 (周一至周日)
     
     def should_trigger(self, current_dt):
+        should1 = int(current_dt.weekday()) == self.weekday
+        should2 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
+        should3 = self.last_executed != current_dt.isocalendar()[1]
+        should = should1 and should2 and should3
         # 周几匹配 且 时间已过 且 当周未执行
-        return current_dt.weekday() == self.weekday and current_dt.time() >= self.execution_time and self.last_executed != current_dt.isocalendar()[1]
+        return should
 
 class TaskRunner:
-    def __init__(self):
+    def __init__(self, context):
         self.daily_tasks = []
         self.weekly_tasks = []
+        self.context = context
     
     def run_daily(self, time_str, task_func):
         """注册每日任务
@@ -851,20 +880,20 @@ class TaskRunner:
         # 处理每日任务
         for task, func in self.daily_tasks:
             if task.should_trigger(bar_time):
-                func()
+                func(self.context)
                 task.last_executed = bar_time.date()
         
         # 处理每周任务
         for task, func in self.weekly_tasks:
             if task.should_trigger(bar_time):
-                func()
+                func(self.context)
                 task.last_executed = bar_time.isocalendar()[1]  # (year, week)
 
 
 def init(context: Any) -> None:
     # 初始化策略环境及参数
     strategy.initialize(context)
-    context.runner = TaskRunner()
+    context.runner = TaskRunner(context)
 
     # 注册调度任务，所有任务均使用顶层包装函数（不使用 lambda 以确保可序列化）
     
@@ -873,14 +902,13 @@ def init(context: Any) -> None:
     # run_daily(check_holdings_yesterday_func, time='9:00')
     # context.run_time("check_holdings_yesterday_func","1nDay","2025-03-0109:00:00","SH")
     # runner.runDaily(time(9,0), check_holdings_yesterday_func)
-    context.runner.run_daily("9:00", check_holdings_yesterday_func)
+    context.runner.run_daily("9:35", check_holdings_yesterday_func)
 
-    
     # 9:05am 准备股票列表
     #run_daily(prepare_stock_list_func, time='9:05')
     # context.run_time("prepare_stock_list_func","1nDay","2025-03-0109:05:00","SH")
     # runner.runDaily(time(9,5), prepare_stock_list_func)
-    context.runner.run_daily("9:05", prepare_stock_list_func)
+    context.runner.run_daily("9:40", prepare_stock_list_func)
 
     # 10:00 am 检查需要卖出的持仓
     #run_daily(sell_stocks_func, time='10:00')
@@ -918,8 +946,8 @@ def init(context: Any) -> None:
 # 在handlebar函数中调用（假设当前K线时间戳为dt）
 def handlebar(context):
     index = context.barpos
-    currentTime = context.get_bar_timetag(index)
-    print(datetime.fromtimestamp(currentTime))
+    currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
+    timestamps = pd.to_datetime(currentTime, unit='ms')
     # 检查并执行任务
     # runner.run(currentTime)
-    context.runner.check_tasks(currentTime)
+    context.runner.check_tasks(timestamps)
