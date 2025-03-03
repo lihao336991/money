@@ -789,96 +789,82 @@ def print_position_info_func(context: Any) -> None:
     strategy.print_position_info(context)
     print('print_position_info_func')
 
-import pandas as pd
-from datetime import time, datetime, timedelta
+class ScheduledTask:
+    """定时任务基类"""
+    def __init__(self, execution_time):
+        self.last_executed = None
+        self.execution_time = self._parse_time(execution_time)
+    
+    def _parse_time(self, time_str):
+        """将HH:MM格式字符串转换为time对象"""
+        try:
+            return datetime.strptime(time_str, "%H:%M").time()
+        except ValueError:
+            raise ValueError("Invalid time format, use HH:MM")
 
-class Runner:
-    def __init__(self):
-        # 存储每日任务 {time: [tasks]}
-        self.daily_tasks = {}
-        # 存储每周任务 {time: [tasks]} 
-        self.weekly_tasks = {}
-        # 记录上次处理日期
-        self.last_date = None
-        # 记录上次周处理标识
-        self.last_week = None
-        # 记录最后执行时间戳（防止同一K线重复执行）
-        self.last_run_timestamp = None
-
-    def runDaily(self, task_time, func, *args, **kwargs):
-        """注册每日任务
-        :param task_time: 触发时间 time对象 如time(9,30)
-        :param func: 要执行的函数
-        """
-        key = task_time.strftime("%H:%M")
-        self.daily_tasks.setdefault(key, []).append((func, args, kwargs))
-
-    def runWeekly(self, task_time, func, *args, **kwargs):
-        """注册每周任务（周一触发）
-        :param task_time: 触发时间 time对象
-        """
-        key = task_time.strftime("%H:%M")
-        self.weekly_tasks.setdefault(key, []).append((func, args, kwargs))
-
-    def run(self, current_dt):
-        """在handlebar中调用，传入当前K线时间戳"""
-        # 避免同一根K线重复处理
-        if current_dt == self.last_run_timestamp:
-            return
-        self.last_run_timestamp = current_dt
+class DailyTask(ScheduledTask):
+    """每日任务"""
+    def should_trigger(self, current_dt):
+        # 生成当日理论执行时间
+        theoretical_dt = datetime.combine(current_dt.date(), self.execution_time)
         
-        current_dt = pd.to_datetime(current_dt)
-        current_date = current_dt.date()
-        current_time = current_dt.time()
-        current_week = current_dt.isocalendar()[1]  # 年周数
-        # 日级检查
-        if current_date != self.last_date:
-            self._check_daily_tasks(current_dt, is_new_day=True)
-            self.last_date = current_date
+        # 当前时间已过执行时间 且 当日未执行
+        return current_dt >= theoretical_dt and self.last_executed != current_dt.date()
 
-            # 周级检查（在新日检查中处理）
-            if current_dt.weekday() == 0:  # 周一
-                if self.last_week != current_week:
-                    self._check_weekly_tasks(current_dt)
-                    self.last_week = current_week
-        else:
-            # 非新日子的常规时间检查
-            self._check_daily_tasks(current_dt)
+class WeeklyTask(ScheduledTask):
+    """每周任务"""
+    def __init__(self, weekday, execution_time):
+        super().__init__(execution_time)
+        self.weekday = weekday  # 0-6 (周一至周日)
+    
+    def should_trigger(self, current_dt):
+        # 周几匹配 且 时间已过 且 当周未执行
+        return current_dt.weekday() == self.weekday and current_dt.time() >= self.execution_time and self.last_executed != current_dt.isocalendar()[1]
 
-    def _check_daily_tasks(self, current_dt, is_new_day=False):
-        """处理每日任务"""
-        current_time = current_dt.time()
-        current_date = current_dt.date()
+class TaskRunner:
+    def __init__(self):
+        self.daily_tasks = []
+        self.weekly_tasks = []
+    
+    def run_daily(self, time_str, task_func):
+        """注册每日任务
+        Args:
+            time_str: 触发时间 "HH:MM"
+            task_func: 任务函数
+        """
+        self.daily_tasks.append( (DailyTask(time_str), task_func) )
+    
+    def run_weekly(self, weekday, time_str, task_func):
+        """注册每周任务
+        Args:
+            weekday: 0-6 代表周一到周日
+            time_str: 触发时间 "HH:MM"
+            task_func: 任务函数
+        """
+        self.weekly_tasks.append( (WeeklyTask(weekday, time_str), task_func) )
+    
+    def check_tasks(self, bar_time):
+        """在handlebar中调用检查任务
+        Args:
+            bar_time: K线结束时间(datetime对象)
+        """
+        # 处理每日任务
+        for task, func in self.daily_tasks:
+            if task.should_trigger(bar_time):
+                func()
+                task.last_executed = bar_time.date()
+        
+        # 处理每周任务
+        for task, func in self.weekly_tasks:
+            if task.should_trigger(bar_time):
+                func()
+                task.last_executed = bar_time.isocalendar()[1]  # (year, week)
 
-        for task_time_str, tasks in self.daily_tasks.items():
-            # 解析任务时间
-            task_time = datetime.strptime(task_time_str, "%H:%M").time()
-
-            # 判断是否满足时间条件
-            if (current_time >= task_time) and \
-               (self.last_date != current_date or is_new_day):
-                # 执行所有该时间的任务
-                for func, args, kwargs in tasks:
-                    func(*args, **kwargs)
-
-    def _check_weekly_tasks(self, current_dt):
-        """处理每周任务"""
-        current_time = current_dt.time()
-
-        for task_time_str, tasks in self.weekly_tasks.items():
-            task_time = datetime.strptime(task_time_str, "%H:%M").time()
-            
-            if current_time >= task_time:
-                for func, args, kwargs in tasks:
-                    func(*args, **kwargs)
-
-
-runner = Runner()
 
 def init(context: Any) -> None:
     # 初始化策略环境及参数
     strategy.initialize(context)
-
+    context.runner = TaskRunner()
 
     # 注册调度任务，所有任务均使用顶层包装函数（不使用 lambda 以确保可序列化）
     
@@ -886,43 +872,54 @@ def init(context: Any) -> None:
     # 9am 检查昨日持仓
     # run_daily(check_holdings_yesterday_func, time='9:00')
     # context.run_time("check_holdings_yesterday_func","1nDay","2025-03-0109:00:00","SH")
-    runner.runDaily(time(9,0), check_holdings_yesterday_func)
+    # runner.runDaily(time(9,0), check_holdings_yesterday_func)
+    context.runner.run_daily("9:00", check_holdings_yesterday_func)
+
+    
     # 9:05am 准备股票列表
     #run_daily(prepare_stock_list_func, time='9:05')
     # context.run_time("prepare_stock_list_func","1nDay","2025-03-0109:05:00","SH")
-    runner.runDaily(time(9,5), prepare_stock_list_func)
+    # runner.runDaily(time(9,5), prepare_stock_list_func)
+    context.runner.run_daily("9:05", prepare_stock_list_func)
 
     # 10:00 am 检查需要卖出的持仓
     #run_daily(sell_stocks_func, time='10:00')
     # context.run_time("sell_stocks_func","1nDay","2025-03-0110:00:00","SH")
-    runner.runDaily(time(10,0), sell_stocks_func)
+    # runner.runDaily(time(10,0), sell_stocks_func)
+    context.runner.run_daily("10:00", sell_stocks_func)
 
     # 14:30 pm 检查需要卖出的持仓
     # run_daily(trade_afternoon_func, time='14:30')
-    context.run_time("trade_afternoon_func","1nDay","2025-03-0114:30:00","SH")
-    runner.runDaily(time(14,30), trade_afternoon_func)
+    # context.run_time("trade_afternoon_func","1nDay","2025-03-0114:30:00","SH")
+    # runner.runDaily(time(14,30), trade_afternoon_func)
+    context.runner.run_daily("14:30", trade_afternoon_func)
 
     # 14:50 pm 检查当日是否需要一键清仓
     # run_daily(close_account_func, time='14:50')
     # context.run_time("close_account_func","1nDay","2025-03-0114:50:00","SH")
-    runner.runDaily(time(14,50), close_account_func)
+    # runner.runDaily(time(14,50), close_account_func)
+    context.runner.run_daily("14:50", close_account_func)
 
     # 15:05 pm 每日收盘后打印一次持仓
     # run_weekly(print_position_info_func, 5, time='15:05')
     # context.run_time("print_position_info_func","1nDay","2025-03-0115:05:00","SH")
-    runner.runDaily(time(15,5), print_position_info_func)
+    # runner.runDaily(time(15,5), print_position_info_func)
+    context.runner.run_daily("15:05", print_position_info_func)
 
     # -------------------每周执行任务 --------------------------------
 
     # 每周做一次调仓动作
     # run_weekly(weekly_adjustment_func, 2, time='10:30')
     # context.run_time("weekly_adjustment_func","7nDay","2025-03-0410:30:00","SH")
-    runner.runWeekly(time(10,30), weekly_adjustment_func)
+    # runner.runWeekly(time(10,30), weekly_adjustment_func)
+    context.runner.run_weekly(1, "10:30", weekly_adjustment_func)
 
 
 # 在handlebar函数中调用（假设当前K线时间戳为dt）
 def handlebar(context):
     index = context.barpos
-    currentTime = context.get_bar_timetag(index) / 1000
+    currentTime = context.get_bar_timetag(index)
     print(datetime.fromtimestamp(currentTime))
-    runner.run(currentTime)
+    # 检查并执行任务
+    # runner.run(currentTime)
+    context.runner.check_tasks(currentTime)
