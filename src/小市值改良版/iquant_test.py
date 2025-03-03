@@ -99,8 +99,8 @@ class TradingStrategy:
             return [round(last_close * 1.2, 2), round(last_close * 0.8), 2]
         return [round(last_close * 1.1, 2), round(last_close * 0.9), 2]
     # 根据股票代码，查询公司总市值
-    def get_market_cup(context, code):
-        ticks = context.get_full_tick(code)
+    def get_market_cup(self, context, code):
+        ticks = context.get_full_tick([code])
         price = ticks[code]["lastPrice"]
         TotalVolumn = context.get_instrumentdetail(code)['TotalVolumn'] # 总股本
         res = price * TotalVolumn
