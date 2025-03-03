@@ -102,7 +102,7 @@ class TradingStrategy:
     def get_market_cup(context, code):
         ticks = context.get_full_tick(code)
         price = ticks[code]["lastPrice"]
-        TotalVolumn = context.get_instrument_detail(code)['TotalVolumn'] # 总股本
+        TotalVolumn = context.get_instrumentdetail(code)['TotalVolumn'] # 总股本
         res = price * TotalVolumn
         return res
 
@@ -131,6 +131,12 @@ class TradingStrategy:
         # 这里给context挂一个positions持仓对象，仅盘前可以复用，盘中要实时取数据不能使用这个
         context.positions = get_trade_detail_data(context.account, context.accountType, 'position')
         
+        # 新增属性，快捷获取当前日期
+        index = context.barpos
+        currentTime = context.get_bar_timetag(index) / 1000
+        context.currentTime = currentTime
+        context.today = datetime.fromtimestamp(currentTime).strftime('%Y-%m-%d')
+
         # if not positions:
         #     print("昨日没有持仓数据。")
         #     return
@@ -198,15 +204,8 @@ class TradingStrategy:
         """
         print("更新持仓股票列表和昨日涨停股票列表")
 
-        # 新增属性，快捷获取当前日期
-        index = context.barpos
-        currentTime = context.get_bar_timetag(index) / 1000
-        context.currentTime = currentTime
-        context.today = datetime.fromtimestamp(currentTime).strftime('%Y-%m-%d')
-
         # 从当前持仓中提取股票代码，更新持仓列表
         if context.positions:
-            print(context.positions, 'context.positions222')
             self.hold_list = [self.codeOfPosition(position) for position in list(context.positions.values())]
             # 取出涨停列表
             self.yesterday_HL_list = self.find_limit_list(self.hold_list).high_list
@@ -230,18 +229,22 @@ class TradingStrategy:
         返回:
             筛选后的候选股票代码列表
         """
+        print('开始每周选股环节 =====================>')
         # 从指定指数中获取初步股票列表
         initial_list = self.get_stock_pool(context)
-
+        print('初选', initial_list)
         # 依次应用过滤器，筛去不符合条件的股票
         initial_list = self.filter_new_stock(context, initial_list)   # 过滤次新股
         # TODO 假如不过滤科创北交呢？
         initial_list = self.filter_kcbj_stock(initial_list)             # 过滤科创/北交股票
-        initial_list = self.filter_st_stock(context, initial_list)               # 过滤ST或风险股票
-        initial_list = self.filter_paused_stock(context, initial_list)           # 过滤停牌股票
+
+        # TODO todebug 这一步筛掉了所有股票
+        # initial_list = self.filter_st_stock(context, initial_list)   
+        print('再选', initial_list)            # 过滤ST或风险股票
+        # initial_list = self.filter_paused_stock(context, initial_list)           # 过滤停牌股票
         # TODO 这两个方法对板块内每个股票重复执行性能可能不好，重新实现，一次性获取整体数据，后续防止重复调用
-        initial_list = self.filter_limitup_stock(context, initial_list)   # 过滤当日涨停（未持仓时）的股票
-        initial_list = self.filter_limitdown_stock(context, initial_list) # 过滤当日跌停（未持仓时）的股票
+        # initial_list = self.filter_limitup_stock(context, initial_list)   # 过滤当日涨停（未持仓时）的股票
+        # initial_list = self.filter_limitdown_stock(context, initial_list) # 过滤当日跌停（未持仓时）的股票
 
 
         # TODO 核心  基本面选股因子，这里聚宽的API和IQuant的API差别巨大，很可能影响最终回测结果！！！
@@ -315,10 +318,11 @@ class TradingStrategy:
 
             # 对目标股票执行买入操作
             self.buy_security(context, target_list)
-            # 更新当天已买入记录，防止重复买入
-            for position in list(context.positions.values()):
-                if self.codeOfPosition(position) not in self.not_buy_again:
-                    self.not_buy_again.append(self.codeOfPosition(position))
+            if context.positions:
+                # 更新当天已买入记录，防止重复买入
+                for position in list(context.positions.values()):
+                    if self.codeOfPosition(position) not in self.not_buy_again:
+                        self.not_buy_again.append(self.codeOfPosition(position))
 
     def check_limit_up(self, context: Any) -> None:
         """
@@ -498,8 +502,8 @@ class TradingStrategy:
             无 ST 或风险标识的股票代码列表
         """
         def not_st_stock(stock_data):
-            return ('ST' not in stock_data.InstrumentName) and ('*' not in stock_data.InstrumentName) and ('退' not in stock_data.InstrumentName) and (stock_data.ExpireDate == 0 or stock_data.ExpireDate == 99999999)
-        return [stock for stock in stock_list if not_st_stock(context.get_instrument_detail(stock))]
+            return ('ST' not in stock_data['InstrumentName']) and ('*' not in stock_data['InstrumentName']) and ('退' not in stock_data['InstrumentName']) and (stock_data['ExpireDate'] == 0 or stock_data['ExpireDate'] == 99999999)
+        return [stock for stock in stock_list if not_st_stock(context.get_instrumentdetail(stock))]
 
     def filter_kcbj_stock(self, stock_list: List[str]) -> List[str]:
         """
@@ -575,7 +579,7 @@ class TradingStrategy:
         返回:
             过滤后的股票代码列表
         """
-        return [stock for stock in stock_list if context.get_instrument_detail(stock).PreClose <= self.up_price]
+        return [stock for stock in stock_list if context.get_instrumentdetail(stock)['PreClose'] <= self.up_price]
 
     def filter_not_buy_again(self, stock_list: List[str]) -> List[str]:
         """
@@ -743,6 +747,8 @@ def prepare_stock_list_func(context: Any) -> None:
         context: 聚宽平台传入的交易上下文对象
     """
     strategy.prepare_stock_list(context)
+    print('prepare_stock_list_func')
+
 
 
 def check_holdings_yesterday_func(context: Any) -> None:
@@ -753,7 +759,7 @@ def check_holdings_yesterday_func(context: Any) -> None:
         context: 聚宽平台传入的交易上下文对象
     """
     strategy.check_holdings_yesterday(context)
-    print('check_holdings_yesterday_func')
+    print('新的一天开始了', context.today, '--------------------------------')
 
 
 def weekly_adjustment_func(context: Any) -> None:
@@ -830,8 +836,6 @@ class DailyTask(ScheduledTask):
         should1 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
         should2 = self.last_executed != current_dt.date()
         should = should1 and should2
-        if should:
-            print('该执行日任务了', current_dt)
         # 当前时间已过执行时间 且 当日未执行
         return should
 
@@ -846,6 +850,8 @@ class WeeklyTask(ScheduledTask):
         should2 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
         should3 = self.last_executed != current_dt.isocalendar()[1]
         should = should1 and should2 and should3
+        if should:
+            print('每周调仓时间到', current_dt)
         # 周几匹配 且 时间已过 且 当周未执行
         return should
 
