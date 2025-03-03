@@ -1,5 +1,9 @@
 
 #coding:gbk
+
+# 回测用的版本
+
+
 from typing import Any, List, Dict, Optional
 from datetime import datetime, timedelta, time
 import numpy as np
