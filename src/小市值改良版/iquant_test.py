@@ -8,6 +8,100 @@ from typing import Any, List, Dict, Optional
 from datetime import datetime, timedelta, time
 import numpy as np
 import pandas as pd
+import requests
+import json
+
+class Messager:
+  def __init__(self):
+    self.webhook1 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=6c1bd45a-74a7-4bd0-93ce-00b2e7157adc'
+    self.webhook2 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=6c1bd45a-74a7-4bd0-93ce-00b2e7157adc'
+  def send_message(self, webhook, message):
+      # 设置企业微信机器人的Webhook地址
+      headers = {'Content-Type': 'application/json; charset=UTF-8'}
+      data = {
+          'msgtype': 'markdown', 
+          'markdown': {
+            'content': message
+          }
+      }
+      response = requests.post(webhook, headers=headers, data=json.dumps(data))
+      if response.status_code == 200:
+          print('消息发送成功')
+      else:
+          print('消息发送失败')
+  # 发送消息
+
+  def send_deal(self, dealInfo):
+    stock = dealInfo['m_strProductName']
+    price = dealInfo['m_dPrice']
+    amount = dealInfo['m_dTradeAmount']
+    markdown = f"""
+    新增买入股票: <font color='warning'>{stock}</font>
+    > 成交价: <font color='warning'>{price}/font>
+    > 成交额: <font color='warning'>{amount}</font>
+    """
+    self.send_message(self.webhook1, markdown)
+
+  def send_positions(self, positions):
+    # stock = position['m_strProductName']
+    df_result = pd.DataFrame(columns=['code', 'eps', 'market_cap'])
+    for position in positions:
+      df_result = df_result.append({
+        'stock': position['m_strInstrumentName'],
+        'price': position['m_dLastPrice'],
+        'open_price': position['m_dOpenPrice'],
+        'amount': position['m_dMarketValue'],
+        'ratio': position['m_dProfitRate'],
+        'profit': position['m_dFloatProfit'],
+      }, ignore_index=True)
+
+    markdown = """
+    ## 📈 股票持仓报告
+    """
+    num = len(df_result)
+    total_profit = df_result['profit'].sum()
+    if total_profit > 0:
+      total_profit = f"<font color='info'>{total_profit}%</font>"
+    else:
+      total_profit = f"<font color='warning'>-{total_profit}%</font>"
+    
+    for index, row in df_result.iterrows():
+      row_str = self.get_position_markdown(row)
+      markdown += row_str
+    markdown += f"""
+    ---
+    **持仓统计**
+    ▶ 总持仓数：`{num} 只`
+    ▶ 总盈亏额：{total_profit}
+    > 数据更新频率：每小时自动刷新
+    """
+    self.send_message(self.webhook2, markdown)
+    
+  def get_position_markdown(self, position):
+    stock = position['stock']
+    price = position['price']
+    open_price = position['open_price']
+    amount = position['amount']
+    ratio = position['ratio']
+    ratio_str = ratio * 100
+    if ratio_str > 0:
+      ratio_str = f"<font color='info'>{ratio_str}%</font>"
+    else:
+      ratio_str = f"<font color='warning'>-{ratio_str}%</font>"
+    profit = position['profit']
+    if profit > 0:
+      profit = f"<font color='info'>{profit}%</font>"
+    else:
+      profit = f"<font color='warning'>-{profit}%</font>"
+    return f"""
+    ▪️ **{stock}**
+    　├─ 当前价：`{price}`
+    　├─ 成本价：`{open_price}`
+    　├─ 持仓额：`¥{amount}`
+    　├─ 盈亏率：`{ratio_str}`
+    　└─ 盈亏额：`¥{profit}`
+    """
+messager = Messager()
 
 class Log:
     def debug(*args):
@@ -88,7 +182,7 @@ class TradingStrategy:
         # log.set_level('strategy', 'debug')
         # 注意：调度任务由全局包装函数统一注册，避免 lambda 导致序列化问题
         context.account = "620000204906"
-        context.accountType = ""
+        context.accountType = 2
 
     # Position的完整品种代码
     def codeOfPosition(position):
@@ -109,7 +203,7 @@ class TradingStrategy:
     # 根据当前日期，返回对应的最新财报时间段
     def get_latest_report_date(self, context):
         index = context.barpos
-        currentTime = context.get_bar_timetag(index) / 1000
+        currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
         year = int(datetime.fromtimestamp(currentTime).strftime('%Y'))
         month = int(datetime.fromtimestamp(currentTime).strftime('%m'))
         # 判断当前季度并设置报告截止日期
@@ -133,7 +227,7 @@ class TradingStrategy:
         
         # 新增属性，快捷获取当前日期
         index = context.barpos
-        currentTime = context.get_bar_timetag(index) / 1000
+        currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
         context.currentTime = currentTime
         context.today = datetime.fromtimestamp(currentTime).strftime('%Y-%m-%d')
 
@@ -356,7 +450,7 @@ class TradingStrategy:
             if len(self.hold_list) < self.stock_num:
                 target_list = self.filter_not_buy_again(self.target_list)
                 target_list = target_list[:min(self.stock_num, len(target_list))]
-                print(f"检测到补仓需求，可用资金 {round(context.accountInfo.m_dAvailable, 2)}，候选补仓股票: {target_list}")
+                print(f"检测到补仓需求，可用资金 {round(taccount(context.accountType, context.account), 2)}，候选补仓股票: {target_list}")
                 self.buy_security(context, target_list)
             self.reason_to_sell = ''
         else:
@@ -501,9 +595,11 @@ class TradingStrategy:
         返回:
             无 ST 或风险标识的股票代码列表
         """
-        def not_st_stock(stock_data):
-            return ('ST' not in stock_data['InstrumentName']) and ('*' not in stock_data['InstrumentName']) and ('退' not in stock_data['InstrumentName']) and (stock_data['ExpireDate'] == 0 or stock_data['ExpireDate'] == 99999999)
-        return [stock for stock in stock_list if not_st_stock(context.get_instrumentdetail(stock))]
+        def not_st_stock(stock):
+            name = context.get_stock_name(stock)
+            stock_data = context.get_instrumentdetail(stock)
+            return ('ST' not in name) and ('*' not in name) and ('退' not in name) and (stock_data['ExpireDate'] == 0 or stock_data['ExpireDate'] == 99999999)
+        return [stock for stock in stock_list if not_st_stock(stock)]
 
     def filter_kcbj_stock(self, stock_list: List[str]) -> List[str]:
         """
@@ -528,7 +624,8 @@ class TradingStrategy:
         返回:
             过滤后的股票代码列表
         """
-        data = self.filter_limitup_stock(context, stock_list)
+        data = self.find_limit_list(context, stock_list)
+        print('涨停列表', data.high_list)
         return [stock for stock in stock_list if stock not in data.high_list]
 
     def filter_limitdown_stock(self, context: Any, stock_list: List[str]) -> List[str]:
@@ -542,7 +639,8 @@ class TradingStrategy:
         返回:
             过滤后的股票代码列表
         """
-        data = self.filter_limitup_stock(context, stock_list)
+        data = self.find_limit_list(context, stock_list)
+        print('跌停列表', data.low_list)
         return [stock for stock in stock_list if stock not in data.low_list]
 
     def filter_new_stock(self, context: Any, stock_list: List[str]) -> List[str]:
@@ -658,18 +756,18 @@ class TradingStrategy:
         target_num = len(target_list)
         if target_num > position_count:
             try:
-                value = context.accountInfo.m_dAvailable / (target_num - position_count)
+                avalable = taccount(context.accountType, context.account)
+                value = avalable / (target_num - position_count)
             except ZeroDivisionError as e:
                 log.error(f"资金分摊时除零错误: {e}")
                 return
+            buy_num = 0
             for stock in target_list:
-                if context.positions[stock].m_nVolume == 0:
-                    if self.open_position(stock, value):
-                        # TODO 放在成交主推回调中实现
-                        print(f"已买入股票 {stock}，分配资金 {value:.2f}")
-                        self.not_buy_again.append(stock)
-                        if len(context.positions) == target_num:
-                            break
+                if context.positions[stock]['m_nVolume'] == 0:
+                    self.open_position(stock, value)
+                    buy_num += 1
+                    if buy_num == target_num - position_count:
+                        break
 
     def today_is_between(self, context: Any) -> bool:
         """
@@ -682,7 +780,7 @@ class TradingStrategy:
             若为空仓日返回 True，否则返回 False
         """
         index = context.barpos
-        currentTime = context.get_bar_timetag(index) / 1000
+        currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
         today_str = currentTime.strftime('%m-%d')
         if self.pass_april:
             if ('04-01' <= today_str <= '04-30') or ('01-01' <= today_str <= '01-30'):
@@ -957,3 +1055,13 @@ def handlebar(context):
     # 检查并执行任务
     # runner.run(currentTime)
     context.runner.check_tasks(timestamps)
+
+def deal_callback(context, dealInfo):
+    stock = dealInfo['m_strInstrumentName']
+    value = dealInfo['m_dTradeAmount']
+    print(f"已买入股票 {stock}，成交额 {value:.2f}")
+    self.not_buy_again.append(stock)
+    
+    # 回测模式不发
+    # messager.send_deal(dealInfo)
+    
