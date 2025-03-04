@@ -184,11 +184,8 @@ class TradingStrategy:
         context.account = "620000204906"
         context.accountType = ""
 
-    # Position的完整品种代码
-    def codeOfPosition(position):
-        return position.m_strInstrumentID + '.' + position.m_strExchangeID
     # 根据股票代码和收盘价，计算次日涨跌停价格
-    def get_limit_of_stock(stock_code, last_close):
+    def get_limit_of_stock(self, stock_code, last_close):
         if str(stock_code).startswith(tuple(['3', '688'])):
             return [round(last_close * 1.2, 2), round(last_close * 0.8), 2]
         return [round(last_close * 1.1, 2), round(last_close * 0.9), 2]
@@ -223,7 +220,7 @@ class TradingStrategy:
         此方法只做了日志打印，因此初始版本不要也罢，后续再完善。
         """
         # 这里给context挂一个positions持仓对象，仅盘前可以复用，盘中要实时取数据不能使用这个
-        context.positions = get_trade_detail_data(context.account, 'STOCK', 'position')
+        self.positions = get_trade_detail_data(context.account, 'STOCK', 'position')
 
         # 新增属性，快捷获取当前日期
         index = context.barpos
@@ -299,10 +296,10 @@ class TradingStrategy:
         print("更新持仓股票列表和昨日涨停股票列表")
 
         # 从当前持仓中提取股票代码，更新持仓列表
-        if context.positions:
-            self.hold_list = [self.codeOfPosition(position) for position in context.positions]
+        if self.positions:
+            self.hold_list = [self.codeOfPosition(position) for position in self.positions]
             # 取出涨停列表
-            self.yesterday_HL_list = self.find_limit_list(self.hold_list).high_list
+            self.yesterday_HL_list = self.find_limit_list(context, self.hold_list).high_list
             # 根据当前日期判断是否为空仓日（例如04月或01月时资金再平衡）
             self.no_trading_today_signal = self.today_is_between(context)
         
@@ -310,7 +307,7 @@ class TradingStrategy:
         return context.get_stock_list_in_sector('中小综指')
 
     # Position的完整品种代码
-    def codeOfPosition(position):
+    def codeOfPosition(self, position):
         return position.m_strInstrumentID + '.' + position.m_strExchangeID
 
     def get_stock_list(self, context: Any) -> List[str]:
@@ -413,9 +410,9 @@ class TradingStrategy:
 
             # 对目标股票执行买入操作
             self.buy_security(context, target_list)
-            if context.positions:
+            if self.positions:
                 # 更新当天已买入记录，防止重复买入
-                for position in context.positions:
+                for position in self.positions:
                     if self.codeOfPosition(position) not in self.not_buy_again:
                         self.not_buy_again.append(self.codeOfPosition(position))
 
@@ -447,7 +444,7 @@ class TradingStrategy:
 
         """
         if self.reason_to_sell == 'limitup':
-            self.hold_list = [self.codeOfPosition(position) for position in context.positions]
+            self.hold_list = [self.codeOfPosition(position) for position in self.positions]
             if len(self.hold_list) < self.stock_num:
                 target_list = self.filter_not_buy_again(self.target_list)
                 target_list = target_list[:min(self.stock_num, len(target_list))]
@@ -485,8 +482,8 @@ class TradingStrategy:
         止盈与止损操作：
         根据策略（1: 个股止损；2: 大盘止损；3: 联合策略）判断是否执行卖出操作。
         """
-        if context.positions:
-            # print(context.positions, '——————————sell_stocks')
+        if self.positions:
+            # print(self.positions, '——————————sell_stocks')
             if self.run_stoploss:
                 if self.stoploss_strategy == 1:
                     # 个股止盈或止损判断
@@ -765,7 +762,7 @@ class TradingStrategy:
             context: 聚宽平台传入的交易上下文对象
             target_list: 目标股票代码列表
         """
-        position_count = len(context.positions)
+        position_count = len(self.positions)
         target_num = len(target_list)
         print("下单逻辑: 持仓数: ", position_count, "目标数",  target_num)
         if target_num > position_count:
@@ -779,11 +776,11 @@ class TradingStrategy:
             buy_num = 0
             for stock in target_list:
                 self.open_position(context, stock, value)
-                # if stock in context.positionsDic.keys() and self.find_stock_of_positions(stock)['m_nVolume'] == 0:
+                # if stock in self.positionsDic.keys() and self.find_stock_of_positions(stock)['m_nVolume'] == 0:
                 buy_num += 1
                 if buy_num == target_num - position_count:
                     break
-
+        print("买入完毕.")
     def today_is_between(self, context: Any) -> bool:
         """
         判断当前日期是否为资金再平衡（空仓）日，通常在04月或01月期间执行空仓操作
@@ -806,12 +803,12 @@ class TradingStrategy:
             return False
 
     def find_stock_of_positions(self, context, stock):
-        result = [position for position in context.positions if position.get('m_strInstrumentID') == stock]
+        result = [position for position in self.positions if position.get('m_strInstrumentID') == stock]
         if result:
             return result[0]
 
     def get_stock_list_of_positions(self, context):
-        return [position.get('m_strInstrumentID') for position in context.positions]
+        return [position.get('m_strInstrumentID') for position in self.positions]
 
     def close_account(self, context: Any) -> None:
         """
@@ -835,7 +832,7 @@ class TradingStrategy:
             context: 聚宽平台传入的交易上下文对象
         """
         print("********** 持仓信息打印开始 **********")
-        for position in context.positions:
+        for position in self.positions:
             cost: float = position.m_dOpenPrice
             price: float = position.m_dLastPrice
             ret: float = 100 * (price / cost - 1)
