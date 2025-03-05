@@ -313,6 +313,33 @@ class TradingStrategy:
     # Position的完整品种代码
     def codeOfPosition(self, position):
         return position.m_strInstrumentID + '.' + position.m_strExchangeID
+    
+    # 基本面选股：根据国九条，过滤净利润为负且营业收入小于1亿的股票
+    def filter_stock_by_gjt(self, context):
+        print('开始每周选股环节（基本面初筛） =====================>')
+        initial_list = self.get_stock_pool(context)
+        
+        seconds_per_year = 365 * 24 * 60 * 60  # 未考虑闰秒
+        lastYearCurrentTime = context.currentTime - seconds_per_year
+        end_date = datetime.fromtimestamp(context.currentTime).strftime('%Y%m%d')
+        start_date = datetime.fromtimestamp(lastYearCurrentTime).strftime('%Y%m%d')
+        eps = context.get_financial_data(['利润表.净利润', '利润表.营业收入'], initial_list, start_date, end_date)
+        
+        for code in initial_list:
+            # TODO 基本面筛选，去年净利润大于1e，营业收入大于1e
+            finance = eps[code].loc[end_date, '利润表.净利润']
+            income = eps[code].loc[end_date, '利润表.营业收入']
+            # money = eps[code].loc[end_date, '资产负债表.固定资产']
+            # 筛选出净利润大于0，营业收入大于1e的股票，期末净资产为正的 
+            if eps is not None and eps[code] is not None and finance > 100000000000 and income > 0:
+                df_result = df_result.append({
+                    'code': code,
+                    'eps': eps,
+                    'market_cap': self.get_market_cup(context, code)
+                }, ignore_index=True)
+        df_result = df_result.sort_values(by='market_cap', ascending=True)
+        stock_list: List[str] = list(df_result.code)
+        return stock_list
 
     def get_stock_list(self, context: Any) -> List[str]:
         """
@@ -326,52 +353,27 @@ class TradingStrategy:
         """
         print('开始每周选股环节 =====================>')
         # 从指定指数中获取初步股票列表
-        initial_list = self.get_stock_pool(context)
+        initial_list = self.filter_stock_by_gjt(context)
+        
         print('初选', initial_list)
-        # 依次应用过滤器，筛去不符合条件的股票
-        initial_list = self.filter_new_stock(context, initial_list)   # 过滤次新股
         # TODO 假如不过滤科创北交呢？
         initial_list = self.filter_kcbj_stock(initial_list)             # 过滤科创/北交股票
+        
+        # 依次应用过滤器，筛去不符合条件的股票
+        initial_list = self.filter_new_stock(context, initial_list)   # 过滤次新股
 
-        # TODO todebug 这一步筛掉了所有股票
-        # initial_list = self.filter_st_stock(context, initial_list)   
+        # TODO to debug 这一步筛掉了所有股票
+        initial_list = self.filter_st_stock(context, initial_list)   
         print('再选', initial_list)            # 过滤ST或风险股票
-        # initial_list = self.filter_paused_stock(context, initial_list)           # 过滤停牌股票
+        initial_list = self.filter_paused_stock(context, initial_list)           # 过滤停牌股票
         # TODO 这两个方法对板块内每个股票重复执行性能可能不好，重新实现，一次性获取整体数据，后续防止重复调用
-        # initial_list = self.filter_limitup_stock(context, initial_list)   # 过滤当日涨停（未持仓时）的股票
-        # initial_list = self.filter_limitdown_stock(context, initial_list) # 过滤当日跌停（未持仓时）的股票
-
-
-        # TODO 核心  基本面选股因子，这里聚宽的API和IQuant的API差别巨大，很可能影响最终回测结果！！！
-        # 聚宽版本-利用基本面查询获取股票代码和EPS数据，并按照市值升序排序
-        # q = query(valuation.code, indicator.eps) \
-        #     .filter(valuation.code.in_(initial_list)) \
-        #     .order_by(valuation.market_cap.asc())
-        # df = get_fundamentals(q)
-
-        # 创建DataFrame容器
-        df_result = pd.DataFrame(columns=['code', 'eps', 'market_cap'])
-        seconds_per_year = 365 * 24 * 60 * 60  # 未考虑闰秒
-        lastYearCurrentTime = context.currentTime - seconds_per_year
-        end_date = datetime.fromtimestamp(context.currentTime).strftime('%Y%m%d')
-        start_date = datetime.fromtimestamp(lastYearCurrentTime).strftime('%Y%m%d')
-        eps = context.get_financial_data(['资产负债表.固定资产','利润表.净利润'], initial_list, start_date, end_date)
-        # TODO EPS数据下方并没有使用到？
-        print(eps)
-        for code in initial_list:
-            if eps is not None:
-                df_result = df_result.append({
-                    'code': code,
-                    'eps': eps,
-                    'market_cap': self.get_market_cup(context, code)
-                }, ignore_index=True)
-        df_result = df_result.sort_values(by='market_cap', ascending=True)
-
-        stock_list: List[str] = list(df_result.code)
+        initial_list = self.filter_limitup_stock(context, initial_list)   # 过滤当日涨停（未持仓时）的股票
+        initial_list = self.filter_limitdown_stock(context, initial_list) # 过滤当日跌停（未持仓时）的股票
+        
         stock_list = stock_list[:100]  # 限制数据规模，防止一次处理数据过大
         # 取前2倍目标持仓股票数作为候选池
         final_list: List[str] = stock_list[:2 * self.stock_num]
-        print(f"初选候选股票: {final_list}")
+        print(f"候选股票{len(final_list)}只: {final_list}")
 
         # 下面注释部分不参与实际功能，只是日志打印，暂时忽略
         # 查询并输出候选股票的财务信息（如财报日期、营业收入、EPS）
