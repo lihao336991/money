@@ -271,6 +271,7 @@ class TradingStrategy:
                 fill_data = True,
                 subscribe = True
             )
+            # TODO 这个方法调试中
             for stock in data:
                 df = data[stock]
                 df['pre'] = df['close'].shift(1)
@@ -278,11 +279,13 @@ class TradingStrategy:
                 df['low_limit'] = self.get_limit_of_stock(stock, df['pre'])[1]
                 df['is_up_to_hight_limit'] = df['close'] == df['high_limit']
                 df['is_down_to_low_limit'] = df['close'] == df['low_limit']
+                # TODO df的key可能是date
+                print(df.keys(), '有几行数据，每行的key都是什么')
                 # 是否涨停
-                if df.at[1, "is_up_to_hight_limit"]:
+                if df.loc[df.keys()[0], "is_up_to_hight_limit"]:
                     high_list.append(stock)
                 # 是否跌停
-                if df.at[1, "is_down_to_low_limit"]:
+                if df.loc[df.keys()[0], "is_down_to_low_limit"]:
                     low_list.append(stock)
         return { high_list, low_list }
 
@@ -298,6 +301,7 @@ class TradingStrategy:
         # 从当前持仓中提取股票代码，更新持仓列表
         if self.positions:
             self.hold_list = [self.codeOfPosition(position) for position in self.positions]
+            print("持仓:", self.hold_list)
             # 取出涨停列表
             self.yesterday_HL_list = self.find_limit_list(context, self.hold_list).high_list
             # 根据当前日期判断是否为空仓日（例如04月或01月时资金再平衡）
@@ -865,8 +869,8 @@ def prepare_stock_list_func(context: Any) -> None:
     参数:
         context: 聚宽平台传入的交易上下文对象
     """
-    strategy.prepare_stock_list(context)
     print('准备当日股票...')
+    strategy.prepare_stock_list(context)
 
 
 
@@ -888,8 +892,8 @@ def weekly_adjustment_func(context: Any) -> None:
     参数:
         context: 聚宽平台传入的交易上下文对象
     """
-    strategy.weekly_adjustment(context)
     print('================== 每周调仓时间 ==================')
+    strategy.weekly_adjustment(context)
 
 
 def sell_stocks_func(context: Any) -> None:
@@ -899,8 +903,8 @@ def sell_stocks_func(context: Any) -> None:
     参数:
         context: 聚宽平台传入的交易上下文对象
     """
-    strategy.sell_stocks(context)
     print('早上交易阶段...')
+    strategy.sell_stocks(context)
 
 
 def trade_afternoon_func(context: Any) -> None:
@@ -910,8 +914,8 @@ def trade_afternoon_func(context: Any) -> None:
     参数:
         context: 聚宽平台传入的交易上下文对象
     """
-    strategy.trade_afternoon(context)
     print('下午交易阶段...')
+    strategy.trade_afternoon(context)
 
 
 def close_account_func(context: Any) -> None:
@@ -921,8 +925,8 @@ def close_account_func(context: Any) -> None:
     参数:
         context: 聚宽平台传入的交易上下文对象
     """
-    strategy.close_account(context)
     print('收盘前检查是否需要清仓...')
+    strategy.close_account(context)
 
 
 def print_position_info_func(context: Any) -> None:
@@ -933,7 +937,6 @@ def print_position_info_func(context: Any) -> None:
         context: 聚宽平台传入的交易上下文对象
     """
     strategy.print_position_info(context)
-    print('***打印持仓信息***')
 
 class ScheduledTask:
     """定时任务基类"""
