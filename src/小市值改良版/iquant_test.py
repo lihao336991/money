@@ -228,10 +228,10 @@ class TradingStrategy:
 
         # 新增属性，快捷获取当前日期
         index = context.barpos
-        currentTime = context.get_bar_timetag(index) / 1000 + 8 * 3600 * 1000
+        currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
         context.currentTime = currentTime
-        context.today = datetime.fromtimestamp(currentTime).strftime('%Y-%m-%d')
-        print(context.today, currentTime)
+        context.today = pd.to_datetime(currentTime, unit='ms')
+        print(context.today)
         # if not positions:
         #     print("昨日没有持仓数据。")
         #     return
@@ -326,8 +326,8 @@ class TradingStrategy:
         initial_list = self.get_stock_pool(context)
         
         seconds_per_year = 365 * 24 * 60 * 60  # 未考虑闰秒
-        lastYearCurrentTime = context.currentTime - seconds_per_year
-        end_date = datetime.fromtimestamp(context.currentTime).strftime('%Y%m%d')
+        lastYearCurrentTime = context.currentTime / 1000 - seconds_per_year
+        end_date = datetime.fromtimestamp(context.currentTime / 1000).strftime('%Y%m%d')
         start_date = datetime.fromtimestamp(lastYearCurrentTime).strftime('%Y%m%d')
         eps = context.get_raw_financial_data(['利润表.净利润', '利润表.营业收入'], initial_list, start_date, end_date)
         
@@ -411,6 +411,9 @@ class TradingStrategy:
         最后买入目标股票，同时记录当天买入情况避免重复下单。
 
         """
+        self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
+        self.hold_list = [self.codeOfPosition(position) for position in self.positions]
+
         if not self.no_trading_today_signal:
             self.not_buy_again = []  # 重置当天已买入记录
             self.target_list = self.get_stock_list(context)
@@ -418,14 +421,18 @@ class TradingStrategy:
             target_list: List[str] = self.target_list[:self.stock_num]
             print(f"每周调仓目标股票: {target_list}")
             print(f"当前持有股票: {self.hold_list}")
-
-            # 遍历当前持仓，若股票不在目标列表且非昨日涨停，则执行卖出操作
             for stock in self.hold_list:
                 if stock not in target_list and stock not in self.yesterday_HL_list:
                     print(f"卖出股票 {stock}")
                     self.close_position(context, stock)
                 else:
                     print(f"持有股票 {stock}")
+
+
+    def weekly_adjustment_buy(self, context: Any) -> None:
+        if not self.no_trading_today_signal:
+            # 遍历当前持仓，若股票不在目标列表且非昨日涨停，则执行卖出操作
+            target_list: List[str] = self.target_list[:self.stock_num]
 
             # 对目标股票执行买入操作
             self.buy_security(context, target_list)
@@ -668,7 +675,7 @@ class TradingStrategy:
         返回:
             过滤后的股票代码列表
         """
-        today = datetime.fromtimestamp(context.currentTime)
+        today = datetime.fromtimestamp(context.currentTime / 1000)
         yesterday = today - timedelta(days=1)
         def is_new_stock(stock):
             try:
@@ -778,6 +785,9 @@ class TradingStrategy:
             context: 聚宽平台传入的交易上下文对象
             target_list: 目标股票代码列表
         """
+        self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
+        self.hold_list = [self.codeOfPosition(position) for position in self.positions]
+
         position_count = len(self.positions)
         target_num = len(target_list)
         print("下单逻辑: 持仓数: ", position_count, "目标数",  target_num)
@@ -785,7 +795,7 @@ class TradingStrategy:
             try:
                 # avalable = TACCOUNT(2, context.account)
                 # value = avalable / (target_num - position_count)
-                value = 1 / (target_num - position_count)
+                value = 1 / target_num
             except ZeroDivisionError as e:
                 print(f"资金分摊时除零错误: {e}")
                 return
@@ -807,7 +817,7 @@ class TradingStrategy:
         返回:
             若为空仓日返回 True，否则返回 False
         """
-        today_str = datetime.fromtimestamp(context.currentTime).strftime('%m-%d')
+        today_str = datetime.fromtimestamp(context.currentTime / 1000).strftime('%m-%d')
         print(today_str)
         if self.pass_april:
             if ('04-01' <= today_str <= '04-30') or ('01-01' <= today_str <= '01-30'):
@@ -907,6 +917,15 @@ def weekly_adjustment_func(context: Any) -> None:
     print('================== 每周调仓时间 ==================')
     strategy.weekly_adjustment(context)
 
+def weekly_adjustment_buy_func(context: Any) -> None:
+    """
+    包装调用策略实例的 weekly_adjustment 方法
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    strategy.weekly_adjustment_buy(context)
+
 
 def sell_stocks_func(context: Any) -> None:
     """
@@ -984,8 +1003,8 @@ class WeeklyTask(ScheduledTask):
         should2 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
         should3 = self.last_executed != current_dt.isocalendar()[1]
         should = should1 and should2 and should3
-        if should:
-            print('每周调仓时间到', current_dt)
+        # if should:
+        #     print('每周调仓时间到', current_dt)
         # 周几匹配 且 时间已过 且 当周未执行
         return should
 
@@ -1083,12 +1102,15 @@ def init(context: Any) -> None:
     context.runner.run_weekly(1, "10:30", weekly_adjustment_func)
 
 
+    # 每周调仓后买入股票
+    context.runner.run_weekly(1, "10:35", weekly_adjustment_buy_func)
+
+
 # 在handlebar函数中调用（假设当前K线时间戳为dt）
 def handlebar(context):
     index = context.barpos
-    currentTime = context.get_bar_timetag(index) / 1000 + 8 * 3600 * 1000
-    time = pd.to_datetime(currentTime, unit='s')
-    # print(time)
+    currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
+    time = pd.to_datetime(currentTime, unit='ms')
     # 检查并执行任务
     # runner.run(currentTime)
     context.runner.check_tasks(time)
