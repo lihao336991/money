@@ -303,15 +303,15 @@ class TradingStrategy:
             context: 聚宽平台传入的交易上下文对象
         """
         print("更新持仓股票列表和昨日涨停股票列表")
-
+        # 根据当前日期判断是否为空仓日（例如04月或01月时资金再平衡）
+        self.no_trading_today_signal = self.today_is_between(context)
         # 从当前持仓中提取股票代码，更新持仓列表
         if self.positions:
             self.hold_list = [self.codeOfPosition(position) for position in self.positions]
             print("持仓:", self.hold_list)
             # 取出涨停列表
             self.yesterday_HL_list = self.find_limit_list(context, self.hold_list)['high_list']
-            # 根据当前日期判断是否为空仓日（例如04月或01月时资金再平衡）
-            self.no_trading_today_signal = self.today_is_between(context)
+
         
     def get_stock_pool(self, context: Any) -> List[str]:
         return context.get_stock_list_in_sector('中小综指')
@@ -368,25 +368,25 @@ class TradingStrategy:
         # 从指定指数中获取初步股票列表
         initial_list = self.filter_stock_by_gjt(context)
         
-        # print('初选', initial_list)
-        # TODO 假如不过滤科创北交呢？
         initial_list = self.filter_kcbj_stock(initial_list)             # 过滤科创/北交股票
         
         # 依次应用过滤器，筛去不符合条件的股票
         initial_list = self.filter_new_stock(context, initial_list)   # 过滤次新股
-
-        # TODO to debug 这一步筛掉了所有股票
-        initial_list = self.filter_st_stock(context, initial_list)   
-        print('再选', initial_list)            # 过滤ST或风险股票
+        initial_list = self.filter_st_stock(context, initial_list)    # 过滤ST或风险股票
         initial_list = self.filter_paused_stock(context, initial_list)           # 过滤停牌股票
-        # TODO 这两个方法对板块内每个股票重复执行性能可能不好，重新实现，一次性获取整体数据，后续防止重复调用
-        # 性能不好，回测不开
-        # initial_list = self.filter_limitup_stock(context, initial_list)   # 过滤当日涨停（未持仓时）的股票
-        # initial_list = self.filter_limitdown_stock(context, initial_list) # 过滤当日跌停（未持仓时）的股票
         
-        stock_list = initial_list[:100]  # 限制数据规模，防止一次处理数据过大
+        initial_list = initial_list[:100]  # 限制数据规模，防止一次处理数据过大
+        # 性能不好，回测不开
+        initial_list = self.filter_limitup_stock(context, initial_list)   # 过滤当日涨停（未持仓时）的股票
+        initial_list = self.filter_limitdown_stock(context, initial_list) # 过滤当日跌停（未持仓时）的股票
+        
         # 取前2倍目标持仓股票数作为候选池
-        final_list: List[str] = stock_list[:2 * self.stock_num]
+        final_list: List[str] = initial_list[:2 * self.stock_num]
+
+
+        # TODO 增加更多选股因子：30日均成交量（流动性），涨停基因（1年内有过>5次涨停记录）
+
+
         print(f"候选股票{len(final_list)}只: {final_list}")
 
         # 下面注释部分不参与实际功能，只是日志打印，暂时忽略
@@ -413,7 +413,7 @@ class TradingStrategy:
         """
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
         self.hold_list = [self.codeOfPosition(position) for position in self.positions]
-
+        print(self.no_trading_today_signal, '禁止交易信号')
         if not self.no_trading_today_signal:
             self.not_buy_again = []  # 重置当天已买入记录
             self.target_list = self.get_stock_list(context)
@@ -795,7 +795,7 @@ class TradingStrategy:
             try:
                 # avalable = TACCOUNT(2, context.account)
                 # value = avalable / (target_num - position_count)
-                value = 1 / target_num
+                value = round(1 / target_num, 2) - 0.01
             except ZeroDivisionError as e:
                 print(f"资金分摊时除零错误: {e}")
                 return
@@ -858,6 +858,7 @@ class TradingStrategy:
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
         self.hold_list = [self.codeOfPosition(position) for position in self.positions]
         print(f"********** 持仓信息打印开始 {context.account}**********")
+        total = 0
         for position in self.positions:
             cost: float = position.m_dOpenPrice
             price: float = position.m_dLastPrice
@@ -871,6 +872,8 @@ class TradingStrategy:
             print(f"持仓: {amount}")
             print(f"市值: {value:.2f}")
             print("--------------------------------------")
+            total += value
+        print(f"总市值：{total:.2f}")
         print("********** 持仓信息打印结束 **********")
     
     def account_callback(self, context, accountInfo):
@@ -1001,7 +1004,8 @@ class WeeklyTask(ScheduledTask):
     def should_trigger(self, current_dt):
         should1 = int(current_dt.weekday()) == self.weekday
         should2 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
-        should3 = self.last_executed != current_dt.isocalendar()[1]
+        week_num = current_dt.isocalendar()[1]        
+        should3 = self.last_executed != f"{current_dt.year}-{week_num}"
         should = should1 and should2 and should3
         # if should:
         #     print('每周调仓时间到', current_dt)
@@ -1046,7 +1050,8 @@ class TaskRunner:
         for task, func in self.weekly_tasks:
             if task.should_trigger(bar_time):
                 func(self.context)
-                task.last_executed = bar_time.isocalendar()[1]  # (year, week)
+                week_num = bar_time.isocalendar()[1]
+                task.last_executed = f"{bar_time.year}-{week_num}"  # (year, week)
 
 
 def init(context: Any) -> None:
