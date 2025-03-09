@@ -134,9 +134,9 @@ class TradingStrategy:
         self.stock_num: int = 7                    # 每次调仓目标持仓股票数量
         self.up_price: float = 100.0               # 股票价格上限过滤条件（排除股价超过此值的股票）
         self.reason_to_sell: str = ''              # 记录卖出原因（例如：'limitup' 涨停破板 或 'stoploss' 止损）
-        self.stoploss_strategy: int = 1            # 止损策略：1-个股止损；2-大盘止损；3-联合止损策略
+        self.stoploss_strategy: int = 3            # 止损策略：1-个股止损；2-大盘止损；3-联合止损策略
         self.stoploss_limit: float = 0.88          # 个股止损阀值（成本价 × 0.88）
-        self.stoploss_market: float = 0.94         # 大盘止损参数（若整体跌幅过大则触发卖出）
+        self.stoploss_market: float = -0.94         # 大盘止损参数（若整体跌幅过大则触发卖出）
 
         self.HV_control: bool = False              # 是否启用成交量异常检测
         self.HV_duration: int = 120                # 检查成交量时参考的历史天数
@@ -574,10 +574,19 @@ class TradingStrategy:
     # 获取板块的涨跌幅情况
     def get_whole_market_data(self, context):
         code = '399101.SZ'
-        ticks = context.get_full_tick([code])
-        data = ticks[code]
-        lastPrice = data['lastPrice']
-        lastClose = data['lastClose']
+        data = context.get_market_data_ex(
+            [],                
+            [code],
+            period="1d",
+            start_time = context.today.strftime('%Y%m%d'),
+            end_time = context.today.strftime('%Y%m%d'),
+            count=2,
+            dividend_type = "follow",
+            fill_data = True,
+            subscribe = True
+        )[code]
+        lastPrice = data['close'][-1]
+        lastClose = data['open'][-1]
         percent = round(100 * (lastPrice - lastClose) / lastClose, 2)
         return percent
         
@@ -603,7 +612,7 @@ class TradingStrategy:
                 elif self.stoploss_strategy == 2:
                     # 大盘止损判断，若整体市场跌幅过大则平仓所有股票
                     down_ratio = self.get_whole_market_data(context)
-                    if down_ratio >= self.stoploss_market:
+                    if down_ratio <= self.stoploss_market:
                         self.reason_to_sell = 'stoploss'
                         log.debug(f"市场检测到跌幅（平均跌幅 {down_ratio}），卖出所有持仓。")
                         for stock in self.get_stock_list_of_positions(context):
@@ -611,7 +620,7 @@ class TradingStrategy:
                 elif self.stoploss_strategy == 3:
                     # 联合止损策略：结合大盘和个股判断
                     down_ratio = self.get_whole_market_data(context)
-                    if down_ratio >= self.stoploss_market:
+                    if down_ratio <= self.stoploss_market:
                         self.reason_to_sell = 'stoploss'
                         log.debug(f"市场检测到跌幅（平均跌幅 {down_ratio}），卖出所有持仓。")
                         for stock in self.get_stock_list_of_positions(context):
