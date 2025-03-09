@@ -149,6 +149,8 @@ class TradingStrategy:
             'risk_level': 'normal'
         }
 
+        self.pool_initialized = False
+
     def initialize(self, context: Any) -> None:
         """
         策略初始化函数
@@ -268,14 +270,13 @@ class TradingStrategy:
                 ['open', 'close'],                
                 stock_list,
                 period="1d",
-                start_time = "",
-                end_time = "",
+                start_time = (context.today - timedelta(days=1)).strftime('%Y%m%d'),
+                end_time = context.today.strftime('%Y%m%d'),
                 count=2,
                 dividend_type = "follow",
                 fill_data = True,
                 subscribe = True
             )
-            # TODO 这个方法调试中
             for stock in data:
                 df = data[stock]
                 df['pre'] = df['close'].shift(1)
@@ -283,12 +284,11 @@ class TradingStrategy:
                 df['low_limit'] = self.get_limit_of_stock(stock, df['pre'])[1]
                 df['is_down_to_low_limit'] = df['close'] == df['low_limit']
                 df['is_up_to_hight_limit'] = df['close'] == df['high_limit']
-                
                 # 是否涨停
-                if df['is_up_to_hight_limit'].iloc[1]:
+                if df['is_up_to_hight_limit'].iloc[-1]:
                     high_list.append(stock)
                 # 是否跌停
-                if df['is_down_to_low_limit'].iloc[1]:
+                if df['is_down_to_low_limit'].iloc[-1]:
                     low_list.append(stock)
         dic = {}
         dic['high_list'] = high_list
@@ -312,7 +312,15 @@ class TradingStrategy:
             # 取出涨停列表
             self.yesterday_HL_list = self.find_limit_list(context, self.hold_list)['high_list']
 
-        
+    # 【回测时使用】回测初始状态跑一遍当时的市值前200名股票，之后都在这200只里选择，为了优化性能（取市值时只能跑全量最新价格，非常费性能）
+    def get_stock_pool_when_test(self, context: Any) -> List[str]:
+        whole_list = context.get_stock_list_in_sector('中小综指')
+        list = self.sort_by_market_cup(context, whole_list)
+        self.pool = list[:100]
+        self.pool_initialized = True
+        return self.pool
+
+    # 正常来说，是每次都从中小板取所有股票来筛选，但是回测性能太差，只用于实盘    
     def get_stock_pool(self, context: Any) -> List[str]:
         return context.get_stock_list_in_sector('中小综指')
 
@@ -320,38 +328,98 @@ class TradingStrategy:
     def codeOfPosition(self, position):
         return position.m_strInstrumentID + '.' + position.m_strExchangeID
     
+    def sort_by_market_cup(self, context, origin_list) -> List[str]:
+        ticks = context.get_market_data_ex(
+            ['close'],                
+            origin_list,
+            period="1d",
+            start_time = context.today.strftime('%Y%m%d'),
+            end_time = context.today.strftime('%Y%m%d'),
+            count=1,
+            dividend_type = "follow",
+            fill_data = True,
+            subscribe = False
+        )
+        df_result = pd.DataFrame(columns=['code','name', 'lastPrice', 'market_cap', 'stock_num'])
+        seconds_per_year = 365 * 24 * 60 * 60  # 未考虑闰秒
+        lastYearCurrentTime = context.currentTime / 1000 - seconds_per_year
+        end_date = datetime.fromtimestamp(context.currentTime / 1000).strftime('%Y%m%d')
+        start_date = datetime.fromtimestamp(lastYearCurrentTime).strftime('%Y%m%d')
+        eps = context.get_raw_financial_data(['利润表.净利润', '利润表.营业收入', '股本表.总股本'], origin_list, start_date, end_date)
+        for code in origin_list:
+            finance_list = list(eps[code]['利润表.净利润'].values())
+            income_list = list(eps[code]['利润表.营业收入'].values())
+            stock_num_list = list(eps[code]['股本表.总股本'].values())
+            if finance_list and income_list and stock_num_list:
+                finance = finance_list[-1]
+                income = income_list[-1]
+                stock_num = stock_num_list[-1]
+            market_cap = ticks[code].iloc[0, 0] * stock_num
+            if code in list(ticks.keys()) and market_cap >= 1000000000: # 最小也要超过10e
+                df_result = df_result.append({
+                    'code': code,
+                    'name': context.get_stock_name(code),
+                    'market_cap': market_cap,
+                    'lastPrice': ticks[code].iloc[0, 0],
+                    'stock_num': stock_num
+                    }, ignore_index=True)
+        df_result = df_result.sort_values(by='market_cap', ascending=True)
+        return list(df_result['code'])
+
+
     # 基本面选股：根据国九条，过滤净利润为负且营业收入小于1亿的股票
     def filter_stock_by_gjt(self, context):
         print('开始每周选股环节（基本面初筛） =====================>')
-        initial_list = self.get_stock_pool(context)
+        # 不每次取全量数据，这里首次
+        if self.pool:
+            initial_list = self.pool
+        else:
+            initial_list = self.get_stock_pool(context)
         
         seconds_per_year = 365 * 24 * 60 * 60  # 未考虑闰秒
         lastYearCurrentTime = context.currentTime / 1000 - seconds_per_year
         end_date = datetime.fromtimestamp(context.currentTime / 1000).strftime('%Y%m%d')
         start_date = datetime.fromtimestamp(lastYearCurrentTime).strftime('%Y%m%d')
-        eps = context.get_raw_financial_data(['利润表.净利润', '利润表.营业收入'], initial_list, start_date, end_date)
+        eps = context.get_raw_financial_data(['利润表.净利润', '利润表.营业收入', '股本表.总股本'], initial_list, start_date, end_date)
         
-        df_result = pd.DataFrame(columns=['code', 'market_cap'])
+        df_result = pd.DataFrame(columns=['code', 'name', 'market_cap', 'lastPrice', 'stock_num'])
         finance = 0
         income = 0
+        ticks = context.get_market_data_ex(
+            ['close'],                
+            initial_list,
+            period="1d",
+            start_time = context.today.strftime('%Y%m%d'),
+            end_time = context.today.strftime('%Y%m%d'),
+            count=1,
+            dividend_type = "follow",
+            fill_data = True,
+            subscribe = False
+        )
+        # print(ticks, '看看tocks')
         for code in initial_list:
             # TODO 基本面筛选，去年净利润大于1e，营业收入大于1e
             finance_list = list(eps[code]['利润表.净利润'].values())
             income_list = list(eps[code]['利润表.营业收入'].values())
-            if finance_list and income_list:
+            stock_num_list = list(eps[code]['股本表.总股本'].values())
+            if finance_list and income_list and stock_num_list:
                 finance = finance_list[-1]
                 income = income_list[-1]
+                stock_num = stock_num_list[-1]
             # money = eps[code].loc[end_date, '资产负债表.固定资产']
             # 筛选出净利润大于0，营业收入大于1e的股票，期末净资产为正的 
             if eps is not None and eps[code] is not None and finance > 0 and income > 100000000:
-                market_cup = self.get_market_cup(context, code)
-                if market_cup:
-                    df_result = df_result.append({
-                        'code': code,
-                        'market_cap': market_cup
+                market_cap = ticks[code].iloc[0, 0] * stock_num
+                df_result = df_result.append({
+                    'code': code,
+                    'name': context.get_stock_name(code),
+                    'market_cap': market_cap,
+                    'lastPrice': ticks[code].iloc[0, 0],
+                    'stock_num': stock_num
                     }, ignore_index=True)
         df_result = df_result.sort_values(by='market_cap', ascending=True)
         stock_list: List[str] = list(df_result.code)
+        # print("看看前20的股票", df_result[:20])
         return stock_list
 
     def get_stock_list(self, context: Any) -> List[str]:
@@ -367,13 +435,14 @@ class TradingStrategy:
         print('开始每周选股环节 =====================>')
         # 从指定指数中获取初步股票列表
         initial_list = self.filter_stock_by_gjt(context)
-        
+
         initial_list = self.filter_kcbj_stock(initial_list)             # 过滤科创/北交股票
         
         # 依次应用过滤器，筛去不符合条件的股票
         initial_list = self.filter_new_stock(context, initial_list)   # 过滤次新股
         initial_list = self.filter_st_stock(context, initial_list)    # 过滤ST或风险股票
         initial_list = self.filter_paused_stock(context, initial_list)           # 过滤停牌股票
+        
         
         initial_list = initial_list[:100]  # 限制数据规模，防止一次处理数据过大
         # 性能不好，回测不开
@@ -385,7 +454,6 @@ class TradingStrategy:
 
 
         # TODO 增加更多选股因子：30日均成交量（流动性），涨停基因（1年内有过>5次涨停记录）
-
 
         print(f"候选股票{len(final_list)}只: {final_list}")
 
@@ -449,10 +517,22 @@ class TradingStrategy:
 
         """
         if self.yesterday_HL_list:
-            ticks = context.get_full_tick(self.yesterday_HL_list)
+            # ticks = context.get_full_tick(self.yesterday_HL_list)
+            ticksOfDay = context.get_market_data_ex(
+                ['close'],                
+                self.yesterday_HL_list,
+                period="1d",
+                start_time = (context.today - timedelta(days=1)).strftime('%Y%m%d'),
+                end_time = context.today.strftime('%Y%m%d'),
+                count=2,
+                dividend_type = "follow",
+                fill_data = True,
+                subscribe = False
+            )
+            print(ticksOfDay, '**持仓票信息-day')
             for stock in self.yesterday_HL_list:
-                price = ticks[stock]["lastPrice"]
-                lastClose = ticks[stock]["lastClose"]
+                price = ticksOfDay[stock]["close"].iloc[-1]
+                lastClose = ticksOfDay[stock]["close"].iloc[0]
                 high_limit = self.get_limit_of_stock(stock, lastClose)[0]
 
                 if price < high_limit:
@@ -472,7 +552,7 @@ class TradingStrategy:
             if len(self.hold_list) < self.stock_num:
                 target_list = self.filter_not_buy_again(self.target_list)
                 target_list = target_list[:min(self.stock_num, len(target_list))]
-                print(f"检测到补仓需求，可用资金 {round(TACCOUNT(2, context.account), 2)}，候选补仓股票: {target_list}")
+                print(f"检测到补仓需求，候选补仓股票: {target_list}")
                 self.buy_security(context, target_list)
             self.reason_to_sell = ''
         else:
@@ -546,7 +626,18 @@ class TradingStrategy:
 
     # 判断某只股票是否到达涨停
     def check_is_high_limit(self, context, stock):
-        data = context.get_full_tick([stock])[stock]
+        # data = context.get_full_tick([stock])[stock]
+        data = context.get_market_data_ex(
+            ['lastPrice', 'lastClose'],                
+            [stock],
+            period="1m",
+            start_time = context.today.strftime('%Y%m%d'),
+            end_time = context.today.strftime('%Y%m%d'),
+            count=1,
+            dividend_type = "follow",
+            fill_data = True,
+            subscribe = True
+        )[stock]
         price = data["lastPrice"]
         lastClose = data["lastClose"]
         high_limit = self.get_limit_of_stock(stock, lastClose)[0]
@@ -555,11 +646,11 @@ class TradingStrategy:
     # 是否是过去n天内最大成交量
     def get_max_volume_last_period(self, context, stock):
         ticks = context.get_market_data_ex(
-            ['volume'],                
+            ['volume'], 
             [stock],
             period="1d",
-            start_time = "",
-            end_time = "",
+            start_time = context.today.strftime('%Y%m%d'),
+            end_time = context.today.strftime('%Y%m%d'),
             count=self.HV_duration,
             dividend_type = "follow",
             fill_data = True,
@@ -646,7 +737,6 @@ class TradingStrategy:
             过滤后的股票代码列表
         """
         data = self.find_limit_list(context, stock_list)
-        print('涨停列表', data['high_list'])
         return [stock for stock in stock_list if stock not in data['high_list']]
 
     def filter_limitdown_stock(self, context: Any, stock_list: List[str]) -> List[str]:
@@ -857,24 +947,30 @@ class TradingStrategy:
         """
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
         self.hold_list = [self.codeOfPosition(position) for position in self.positions]
-        print(f"********** 持仓信息打印开始 {context.account}**********")
-        total = 0
-        for position in self.positions:
-            cost: float = position.m_dOpenPrice
-            price: float = position.m_dLastPrice
-            ret: float = 100 * (price / cost - 1)
-            value: float = position.m_dMarketValue
-            amount: int = position.m_nVolume
-            print(f"股票: {self.codeOfPosition(position)}")
-            print(f"成本价: {cost:.2f}")
-            print(f"现价: {price:.2f}")
-            print(f"涨跌幅: {ret:.2f}%")
-            print(f"持仓: {amount}")
-            print(f"市值: {value:.2f}")
-            print("--------------------------------------")
-            total += value
-        print(f"总市值：{total:.2f}")
-        print("********** 持仓信息打印结束 **********")
+
+        if self.positions:
+            print(f"********** 持仓信息打印开始 {context.account}**********")
+            total = 0
+            for position in self.positions:
+                cost: float = position.m_dOpenPrice
+                price: float = position.m_dLastPrice
+                ret: float = 100 * (price / cost - 1)
+                value: float = position.m_dMarketValue
+                amount: int = position.m_nVolume
+                code = self.codeOfPosition(position)
+                print(f"股票: {self.codeOfPosition(position)}")
+                print(f"股票名: {context.get_stock_name(code)}")
+                print(f"成本价: {cost:.2f}")
+                print(f"现价: {price:.2f}")
+                print(f"涨跌幅: {ret:.2f}%")
+                print(f"持仓: {amount}")
+                print(f"市值: {value:.2f}")
+                print("--------------------------------------")
+                total += value
+            print(f"总市值：{total:.2f}")
+            print("********** 持仓信息打印结束 **********")
+        else:
+            print("**********没有持仓信息**********")
     
     def account_callback(self, context, accountInfo):
         print(accountInfo)
@@ -1117,8 +1213,10 @@ def handlebar(context):
     currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
     time = pd.to_datetime(currentTime, unit='ms')
     # 检查并执行任务
-    # runner.run(currentTime)
     context.runner.check_tasks(time)
+
+    if not strategy.pool_initialized:
+        strategy.get_stock_pool_when_test(context)
 
 def deal_callback(context, dealInfo):
     stock = dealInfo['m_strInstrumentName']
