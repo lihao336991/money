@@ -228,12 +228,6 @@ class TradingStrategy:
         # 这里给context挂一个positions持仓对象，仅盘前可以复用，盘中要实时取数据不能使用这个
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
 
-        # 新增属性，快捷获取当前日期
-        index = context.barpos
-        currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
-        context.currentTime = currentTime
-        context.today = pd.to_datetime(currentTime, unit='ms')
-        print(context.today)
         # if not positions:
         #     print("昨日没有持仓数据。")
         #     return
@@ -1218,11 +1212,14 @@ def init(context: Any) -> None:
 
 # 在handlebar函数中调用（假设当前K线时间戳为dt）
 def handlebar(context):
+    # 新增属性，快捷获取当前日期
     index = context.barpos
     currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
-    time = pd.to_datetime(currentTime, unit='ms')
+    context.currentTime = currentTime
+    context.today = pd.to_datetime(currentTime, unit='ms')
+
     # 检查并执行任务
-    context.runner.check_tasks(time)
+    context.runner.check_tasks(context.today)
 
     if not strategy.pool_initialized:
         strategy.get_stock_pool_when_test(context)
@@ -1234,8 +1231,9 @@ def deal_callback(context, dealInfo):
     strategy.not_buy_again.append(stock)
     
     # 回测模式不发
-    # messager.send_deal(dealInfo)
+    messager.send_deal(dealInfo)
     
 
 def position_callback(context, positionInfo):
     print("持仓变了", positionInfo)
+    messager.send_positions(positionInfo)
