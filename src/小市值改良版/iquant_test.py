@@ -597,10 +597,10 @@ class TradingStrategy:
                     for stock in self.get_stock_list_of_positions(context):
                         pos = self.find_stock_of_positions(stock)
                         if pos.m_dSettlementPrice >= pos.m_dOpenPrice * 2:
-                            order_target_value(stock, 0, context, context.account)
+                            self.close_position(context, stock)
                             log.debug(f"股票 {stock} 实现100%盈利，执行止盈卖出。")
                         elif pos.m_dSettlementPrice < pos.m_dOpenPrice * self.stoploss_limit:
-                            order_target_value(stock, 0, context, context.account)
+                            self.close_position(context, stock)
                             log.debug(f"股票 {stock} 触及止损阈值，执行卖出。")
                             self.reason_to_sell = 'stoploss'
                 elif self.stoploss_strategy == 2:
@@ -610,7 +610,7 @@ class TradingStrategy:
                         self.reason_to_sell = 'stoploss'
                         log.debug(f"市场检测到跌幅（平均跌幅 {down_ratio}），卖出所有持仓。")
                         for stock in self.get_stock_list_of_positions(context):
-                            order_target_value(stock, 0, context, context.account)
+                            self.close_position(context, stock)
                 elif self.stoploss_strategy == 3:
                     # 联合止损策略：结合大盘和个股判断
                     down_ratio = self.get_whole_market_data(context)
@@ -618,12 +618,12 @@ class TradingStrategy:
                         self.reason_to_sell = 'stoploss'
                         log.debug(f"市场检测到跌幅（平均跌幅 {down_ratio}），卖出所有持仓。")
                         for stock in self.get_stock_list_of_positions(context):
-                            order_target_value(stock, 0, context, context.account)
+                            self.close_position(context, stock)
                     else:
                         for stock in self.get_stock_list_of_positions(context):
                             pos = self.find_stock_of_positions(stock)
                             if pos.m_dSettlementPrice < pos.m_dOpenPrice * self.stoploss_limit:
-                                order_target_value(stock, 0, context, context.account)
+                                self.close_position(context, stock)
                                 log.debug(f"股票 {stock} 触及止损，执行卖出。")
                                 self.reason_to_sell = 'stoploss'
 
@@ -805,26 +805,6 @@ class TradingStrategy:
         """
         return [stock for stock in stock_list if stock not in self.not_buy_again]
 
-    # 以下为下单及仓位管理函数
-    def order_target_value_(self, context, security: str, value: float) -> Any:
-        """
-        封装 order_target_value 函数进行下单，同时记录中文日志和异常信息
-
-        参数:
-            security: 股票代码
-            value: 下单目标金额
-
-        返回:
-            下单后生成的订单对象；若失败返回 None
-        """
-        if value != 0:
-            log.debug(f"正在为 {security} 下单，目标金额 {value}")
-        try:
-            order_target_value(security, value, context, context.account)
-            return True
-        except Exception as e:
-            print(f"股票 {security} 下单时出错，目标金额 {value}，错误信息: {e}")
-            return None
 
     def open_position(self, context, security: str, value: float) -> bool:
         """
@@ -837,22 +817,13 @@ class TradingStrategy:
         返回:
             若下单成功（部分或全部成交）返回 True，否则返回 False
         """
-        #order = self.order_target_value_(context, security, value)
         print("买入股票:", security, context.get_stock_name(security), int(value * 100))
-        # order = passorder(
-        #     opType = 23, 
-        #     orderType = 1123,
-        #     accountID = context.account,
-        #     orderCode = security,
-        #     prType = 4,
-        #     price = -1,
-        #     volume = int(value * 100),            
-        #     ContextInfo = context
-        # )
         # 该函数回测不生效，暂时注释
-        # passorder(23, 1123, "TS账户", security, 5, -1, int(value * 100), "买入策略", 2, "", context)
-        order_target_percent(security, round(value, 2), 'COMPETE', context, context.account)
-
+        if context.do_back_test:
+            order_target_percent(security, round(value, 2), 'COMPETE', context, context.account)
+        else:
+            # 1113 表示总资金百分比下单
+            passorder(23, 1113, context.account, security, 5, -1, round(value, 2), "买入策略", 2, "", context)
 
     def close_position(self, context, stock: Any) -> bool:
         """
@@ -865,10 +836,12 @@ class TradingStrategy:
             若下单后订单全部成交返回 True，否则返回 False
         """
         if stock:
-            order = self.order_target_value_(context, stock, 0)
-            if order is not None:
-                return True
-            return False
+            if context.do_back_test:
+                order_target_value(stock, value, context, context.account)
+            else:
+                # 1123 表示可用股票数量下单，这里表示全卖
+                passorder(24, 1123, context.account, stock, 5, 1, 1, "卖出策略", 2, "", context)
+            return True
 
     def buy_security(self, context: Any, target_list: List[str]) -> None:
         """
