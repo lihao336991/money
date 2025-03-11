@@ -330,7 +330,7 @@ class TradingStrategy:
             ['close'],                
             origin_list,
             period="1d",
-            start_time = context.today.strftime('%Y%m%d'),
+            start_time = (context.today - timedelta(days=1)).strftime('%Y%m%d'),
             end_time = context.today.strftime('%Y%m%d'),
             count=1,
             dividend_type = "follow",
@@ -351,15 +351,19 @@ class TradingStrategy:
                 finance = finance_list[-1]
                 income = income_list[-1]
                 stock_num = stock_num_list[-1]
-            market_cap = ticks[code].iloc[0, 0] * stock_num
-            if code in list(ticks.keys()) and market_cap >= 1000000000: # 最小也要超过10e
-                df_result = df_result.append({
-                    'code': code,
-                    'name': context.get_stock_name(code),
-                    'market_cap': market_cap,
-                    'lastPrice': ticks[code].iloc[0, 0],
-                    'stock_num': stock_num
-                    }, ignore_index=True)
+            try:
+                market_cap = ticks[code].iloc[0, 0] * stock_num
+                if code in list(ticks.keys()) and market_cap >= 1000000000: # 最小也要超过10e
+                    df_result = df_result.append({
+                        'code': code,
+                        'name': context.get_stock_name(code),
+                        'market_cap': market_cap,
+                        'lastPrice': ticks[code].iloc[0, 0],
+                        'stock_num': stock_num
+                        }, ignore_index=True)
+            except Exception as e:
+                # continue
+                print(code, ticks[code])
         df_result = df_result.sort_values(by='market_cap', ascending=True)
         return list(df_result['code'])
 
@@ -826,7 +830,7 @@ class TradingStrategy:
             order_target_percent(security, round(value, 2), 'COMPETE', context, context.account)
         else:
             # 1113 表示总资金百分比下单
-            passorder(23, 1113, context.account, security, 5, -1, round(value, 2), "买入策略", 2, "", context)
+            passorder(23, 1113, context.account, security, 5, -1, int(value * 100), "买入策略", 2, "", context)
 
     def close_position(self, context, stock: Any) -> bool:
         """
@@ -843,7 +847,7 @@ class TradingStrategy:
                 order_target_value(stock, value, context, context.account)
             else:
                 # 1123 表示可用股票数量下单，这里表示全卖
-                passorder(24, 1123, context.account, stock, 5, 1, 1, "卖出策略", 2, "", context)
+                passorder(24, 1123, context.account, stock, 5, 1, 100, "卖出策略", 2, "", context)
             return True
 
     def buy_security(self, context: Any, target_list: List[str]) -> None:
