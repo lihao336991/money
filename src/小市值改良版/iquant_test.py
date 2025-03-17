@@ -11,11 +11,12 @@ import pandas as pd
 import requests
 import json
 
-
 class Messager:
     def __init__(self):
+        # 消息通知
         self.webhook1 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=6c1bd45a-74a7-4bd0-93ce-00b2e7157adc'
-        self.webhook2 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=6c1bd45a-74a7-4bd0-93ce-00b2e7157adc'
+        # 日志记录
+        self.webhook2 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a1f9970c-4914-49de-b69a-e447a5d97c64'
     def send_message(self, webhook, message):
         # 设置企业微信机器人的Webhook地址
         headers = {'Content-Type': 'application/json; charset=UTF-8'}
@@ -31,8 +32,10 @@ class Messager:
         else:
             print('消息发送失败')
     # 发送消息
-    def send(self, message):
-        self.send_message(self.webhook1, message)
+    def sendLog(self, message):
+        # 开关控制，默认关闭
+        # self.send_message(self.webhook2, message)
+        print(message)
   
     def send_deal(self, dealInfo):
         stock = dealInfo['m_strProductName']
@@ -78,7 +81,7 @@ class Messager:
         ▶ 总盈亏额：{total_profit}
         > 数据更新频率：每小时自动刷新
         """
-        self.send_message(self.webhook2, markdown)
+        self.send_message(self.webhook1, markdown)
 
     def get_position_markdown(self, position):
         stock = position['stock']
@@ -1199,18 +1202,18 @@ def deal_callback(context, dealInfo):
     value = dealInfo['m_dTradeAmount']
     print(f"已买入股票 {stock}，成交额 {value:.2f}")
     strategy.not_buy_again.append(stock)
-    messager.send(f"已买入股票 {stock}，成交额 {value:.2f}")    
+    messager.sendLog(f"已买入股票 {stock}，成交额 {value:.2f}")    
     # 回测模式不发
     messager.send_deal(dealInfo)
     
 
 def position_callback(context, positionInfo):
-    messager.send("持仓信息变更回调")
+    messager.sendLog("持仓信息变更回调")
     messager.send_positions(positionInfo)
     
 def orderError_callback(context, orderArgs, errMsg):
-    messager.send(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
+    messager.sendLog(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
     
 def order_callback(context, orderInfo):
-    messager.send(f"委托状态变化回调")
+    messager.sendLog(f"委托状态变化回调")
     
