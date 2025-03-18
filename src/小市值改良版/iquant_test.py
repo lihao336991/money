@@ -833,7 +833,7 @@ class TradingStrategy:
             order_target_percent(security, round(value, 2), 'COMPETE', context, context.account)
         else:
             # 1113 表示总资金百分比下单
-            passorder(23, 1113, context.account, security, 5, -1, int(value * 100), "买入策略", 2, "", context)
+            passorder(23, 1113, context.account, security, 5, -1, round(value, 2), "买入策略", 1, "", context)
 
     def close_position(self, context, stock: Any) -> bool:
         """
@@ -850,7 +850,7 @@ class TradingStrategy:
                 order_target_value(stock, value, context, context.account)
             else:
                 # 1123 表示可用股票数量下单，这里表示全卖
-                passorder(24, 1123, context.account, stock, 5, 1, 100, "卖出策略", 2, "", context)
+                passorder(24, 1123, context.account, stock, 5, 1, 1, "卖出策略", 1, "", context)
             return True
 
     def buy_security(self, context: Any, target_list: List[str]) -> None:
@@ -1191,11 +1191,14 @@ def handlebar(context):
     context.currentTime = currentTime
     context.today = pd.to_datetime(currentTime, unit='ms')
 
-    # 检查并执行任务
-    context.runner.check_tasks(context.today)
+    if (datetime.now() - timedelta(days=1) > context.today) and not context.do_back_test:
+        print('非回测模式，历史不处理')
+    else:
+        # 检查并执行任务
+        context.runner.check_tasks(context.today)
 
-    if not strategy.pool_initialized:
-        strategy.get_stock_pool_when_test(context)
+        if not strategy.pool_initialized:
+            strategy.get_stock_pool_when_test(context)
 
 def deal_callback(context, dealInfo):
     stock = dealInfo['m_strInstrumentName']
@@ -1210,6 +1213,7 @@ def deal_callback(context, dealInfo):
 def position_callback(context, positionInfo):
     messager.sendLog("持仓信息变更回调")
     messager.send_positions(positionInfo)
+    print("持仓信息变更回调", positionInfo)
     
 def orderError_callback(context, orderArgs, errMsg):
     messager.sendLog(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")

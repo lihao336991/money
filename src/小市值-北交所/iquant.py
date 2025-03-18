@@ -610,6 +610,7 @@ class TradingStrategy:
         end_date = datetime.fromtimestamp(context.currentTime / 1000).strftime('%Y%m%d')
         start_date = datetime.fromtimestamp(lastYearCurrentTime).strftime('%Y%m%d')
         eps = context.get_raw_financial_data(['利润表.净利润', '利润表.营业收入', '股本表.总股本'], origin_list, start_date, end_date)
+        print(eps)
         for code in origin_list:
             finance_list = list(eps[code]['利润表.净利润'].values())
             income_list = list(eps[code]['利润表.营业收入'].values())
@@ -618,15 +619,15 @@ class TradingStrategy:
                 finance = finance_list[-1]
                 income = income_list[-1]
                 stock_num = stock_num_list[-1]
-            market_cap = ticks[code].iloc[0, 0] * stock_num
-            if code in list(ticks.keys()) and market_cap >= 1000000000: # 最小也要超过10e
-                df_result = df_result.append({
-                    'code': code,
-                    'name': context.get_stock_name(code),
-                    'market_cap': market_cap,
-                    'lastPrice': ticks[code].iloc[0, 0],
-                    'stock_num': stock_num
-                    }, ignore_index=True)
+                market_cap = ticks[code].iloc[0, 0] * stock_num
+                if code in list(ticks.keys()) and market_cap >= 1000000000: # 最小也要超过10e
+                    df_result = df_result.append({
+                        'code': code,
+                        'name': context.get_stock_name(code),
+                        'market_cap': market_cap,
+                        'lastPrice': ticks[code].iloc[0, 0],
+                        'stock_num': stock_num
+                        }, ignore_index=True)
         df_result = df_result.sort_values(by='market_cap', ascending=True)
         return list(df_result['code'])
 
