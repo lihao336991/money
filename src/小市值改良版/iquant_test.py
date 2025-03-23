@@ -48,18 +48,18 @@ class Messager:
         """
         self.send_message(self.webhook1, markdown)
 
-    def send_positions(self, positions):
+    def send_positions(self, position):
         # stock = position['m_strProductName']
         df_result = pd.DataFrame(columns=['stock', 'price', 'open_price', 'amount', 'ratio', 'profit'])
-        for position in positions:
-            df_result = df_result.append({
-            'stock': position['m_strInstrumentName'],
-            'price': position['m_dLastPrice'],
-            'open_price': position['m_dOpenPrice'],
-            'amount': position['m_dMarketValue'],
-            'ratio': position['m_dProfitRate'],
-            'profit': position['m_dFloatProfit'],
-            }, ignore_index=True)
+        # for position in positions:
+        df_result = df_result.append({
+        'stock': position['m_strInstrumentName'],
+        'price': position['m_dLastPrice'],
+        'open_price': position['m_dOpenPrice'],
+        'amount': position['m_dMarketValue'],
+        'ratio': position['m_dProfitRate'],
+        'profit': position['m_dFloatProfit'],
+        }, ignore_index=True)
 
         markdown = """
         ## 📈 股票持仓报告
@@ -599,6 +599,7 @@ class TradingStrategy:
         止盈与止损操作：
         根据策略（1: 个股止损；2: 大盘止损；3: 联合策略）判断是否执行卖出操作。
         """
+        self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
         if self.positions:
             # print(self.positions, '——————————sell_stocks')
             if self.run_stoploss:
@@ -847,7 +848,7 @@ class TradingStrategy:
         """
         if stock:
             if context.do_back_test:
-                order_target_value(stock, value, context, context.account)
+                order_target_value(stock, 0, context, context.account)
             else:
                 # 1123 表示可用股票数量下单，这里表示全卖
                 passorder(24, 1123, context.account, stock, 5, 1, 1, "卖出策略", 1, "", context)
@@ -1178,9 +1179,10 @@ def init(context: Any) -> None:
         context.run_time("print_position_info_func","1nDay","2025-03-0115:05:00","SH")
         # -------------------每周执行任务 --------------------------------
         # 09:40 am 每周做一次调仓动作，尽量早，流动性充足
-        context.run_time("weekly_adjustment_func","7nDay","2025-03-0409:40:00","SH")
+        context.run_time("weekly_adjustment_func","7nDay","2025-03-1909:40:00","SH")
         # 09:50 am 每周调仓后买入股票
-        context.run_time("weekly_adjustment_buy_func","7nDay","2025-03-0409:50:00","SH")
+        context.run_time("weekly_adjustment_buy_func","7nDay","2025-03-1909:50:00","SH")
+
 
 
 # 在handlebar函数中调用（假设当前K线时间戳为dt）
@@ -1192,7 +1194,8 @@ def handlebar(context):
     context.today = pd.to_datetime(currentTime, unit='ms')
 
     if (datetime.now() - timedelta(days=1) > context.today) and not context.do_back_test:
-        print('非回测模式，历史不处理')
+        # print('非回测模式，历史不处理')
+        return
     else:
         # 检查并执行任务
         context.runner.check_tasks(context.today)
@@ -1211,13 +1214,14 @@ def deal_callback(context, dealInfo):
     
 
 def position_callback(context, positionInfo):
-    messager.sendLog("持仓信息变更回调")
-    messager.send_positions(positionInfo)
     print("持仓信息变更回调", positionInfo)
+    messager.sendLog("持仓信息变更回调" + str(positionInfo))
+    messager.send_positions(positionInfo)
     
 def orderError_callback(context, orderArgs, errMsg):
     messager.sendLog(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
     
 def order_callback(context, orderInfo):
-    messager.sendLog(f"委托状态变化回调")
+    print("委托信息变更回调", orderInfo)
+    messager.sendLog(f"委托状态变化回调" + str(orderInfo))
     
