@@ -11,6 +11,10 @@ import pandas as pd
 import requests
 import json
 
+def is_trading():
+    current_time = datetime.now().time()
+    return time(9,0) <= current_time <= time(15,0)
+
 class Messager:
     def __init__(self):
         # 消息通知
@@ -31,10 +35,10 @@ class Messager:
             print('消息发送成功')
         else:
             print('消息发送失败')
-    # 发送消息
+    # 发送消息（支持控制只在开盘期间推送）
     def sendLog(self, message):
-        # 开关控制，默认关闭
-        # self.send_message(self.webhook2, message)
+        if is_trading():
+            self.send_message(self.webhook2, message)
         print(message)
   
     def send_deal(self, dealInfo):
@@ -48,18 +52,18 @@ class Messager:
         """
         self.send_message(self.webhook1, markdown)
 
-    def send_positions(self, position):
+    def send_positions(self, positions):
         # stock = position['m_strProductName']
         df_result = pd.DataFrame(columns=['stock', 'price', 'open_price', 'amount', 'ratio', 'profit'])
-        # for position in positions:
-        df_result = df_result.append({
-        'stock': position['m_strInstrumentName'],
-        'price': position['m_dLastPrice'],
-        'open_price': position['m_dOpenPrice'],
-        'amount': position['m_dMarketValue'],
-        'ratio': position['m_dProfitRate'],
-        'profit': position['m_dFloatProfit'],
-        }, ignore_index=True)
+        for position in positions:
+            df_result = df_result.append({
+            'stock': position['m_strInstrumentName'],
+            'price': position['m_dLastPrice'],
+            'open_price': position['m_dOpenPrice'],
+            'amount': position['m_dMarketValue'],
+            'ratio': position['m_dProfitRate'],
+            'profit': position['m_dFloatProfit'],
+            }, ignore_index=True)
 
         markdown = """
         ## 📈 股票持仓报告
@@ -79,7 +83,6 @@ class Messager:
         **持仓统计**
         ▶ 总持仓数：`{num} 只`
         ▶ 总盈亏额：{total_profit}
-        > 数据更新频率：每小时自动刷新
         """
         self.send_message(self.webhook1, markdown)
 
@@ -934,6 +937,7 @@ class TradingStrategy:
         """
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
         self.hold_list = [self.codeOfPosition(position) for position in self.positions]
+        messager.send_positions(self.positions)
 
         if self.positions:
             print(f"********** 持仓信息打印开始 {context.account}**********")
@@ -1216,7 +1220,6 @@ def deal_callback(context, dealInfo):
 def position_callback(context, positionInfo):
     print("持仓信息变更回调", positionInfo)
     messager.sendLog("持仓信息变更回调" + str(positionInfo))
-    messager.send_positions(positionInfo)
     
 def orderError_callback(context, orderArgs, errMsg):
     messager.sendLog(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
