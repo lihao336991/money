@@ -308,6 +308,7 @@ class TradingStrategy:
         print("更新持仓股票列表和昨日涨停股票列表")
         # 根据当前日期判断是否为空仓日（例如04月或01月时资金再平衡）
         self.no_trading_today_signal = self.today_is_between(context)
+        print( '是否是空仓日:', self.no_trading_today_signal)
         # 从当前持仓中提取股票代码，更新持仓列表
         if self.positions:
             self.hold_list = [self.codeOfPosition(position) for position in self.positions]
@@ -604,7 +605,7 @@ class TradingStrategy:
         """
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
         if self.positions:
-            # print(self.positions, '——————————sell_stocks')
+            print('有持仓，检查是否需要止损，当前止损策略:', self.run_stoploss, self.stoploss_strategy)
             if self.run_stoploss:
                 if self.stoploss_strategy == 1:
                     # 个股止盈或止损判断
@@ -937,7 +938,8 @@ class TradingStrategy:
         """
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
         self.hold_list = [self.codeOfPosition(position) for position in self.positions]
-        messager.send_positions(self.positions)
+        if not context.do_back_test:
+            messager.send_positions(self.positions)
 
         if self.positions:
             print(f"********** 持仓信息打印开始 {context.account}**********")
@@ -1156,7 +1158,7 @@ def init(context: Any) -> None:
         context.runner.run_daily("9:40", prepare_stock_list_func)
         # 10:00 am 止盈止损检测
         context.runner.run_daily("10:00", sell_stocks_func)
-        # 14:30 pm 检查需要卖出的持仓
+        # 14:30 pm 检查涨停破板后需要卖出的持仓
         context.runner.run_daily("14:30", trade_afternoon_func)
         # 14:50 pm 检查当日是否需要一键清仓
         context.runner.run_daily("14:50", close_account_func)    
@@ -1175,7 +1177,7 @@ def init(context: Any) -> None:
         context.run_time("prepare_stock_list_func","1nDay","2025-03-0109:05:00","SH")
         # 9:30 am 止盈止损检测
         context.run_time("sell_stocks_func","1nDay","2025-03-0109:30:00","SH")
-        # 14:30 pm 检查需要卖出的持仓
+        # 14:30 pm 检查涨停破板后需要卖出的持仓
         context.run_time("trade_afternoon_func","1nDay","2025-03-0114:30:00","SH")
         # 14:50 pm 检查当日是否需要一键清仓
         context.run_time("close_account_func","1nDay","2025-03-0114:50:00","SH")
@@ -1218,13 +1220,13 @@ def deal_callback(context, dealInfo):
     
 
 def position_callback(context, positionInfo):
-    print("持仓信息变更回调", positionInfo)
-    messager.sendLog("持仓信息变更回调" + str(positionInfo))
+    print("持仓信息变更回调", context.get_stock_name(strategy.codeOfPosition(positionInfo)))
+    messager.sendLog("持仓信息变更回调" + context.get_stock_name(strategy.codeOfPosition(positionInfo)))
     
 def orderError_callback(context, orderArgs, errMsg):
     messager.sendLog(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
     
 def order_callback(context, orderInfo):
-    print("委托信息变更回调", orderInfo)
-    messager.sendLog(f"委托状态变化回调" + str(orderInfo))
+    print("委托信息变更回调", context.get_stock_name(strategy.codeOfPosition(orderInfo)))
+    messager.sendLog(f"委托状态变化回调" + context.get_stock_name(strategy.codeOfPosition(orderInfo)))
     
