@@ -10,9 +10,24 @@ import numpy as np
 import pandas as pd
 import requests
 import json
+import threading
+import uuid
+import time as nativeTime
 
 # 设置账号
-MY_ACCOUNT = "190200051469"
+# 腾腾实盘
+# MY_ACCOUNT = "190200051469"
+# 我的模拟
+MY_ACCOUNT = "620000204906"
+
+IS_MOCK = True
+
+
+# 全局状态存储器
+class G():pass
+g = G()
+g.orderIdMap = {}
+g.buyValue = 0
 
 def is_trading():
     current_time = datetime.now().time()
@@ -43,40 +58,51 @@ class Messager:
         if is_trading():
             self.send_message(self.webhook2, message)
         print(message)
+
+    def sendMsg(self, message):
+        if is_trading():
+            self.send_message(self.webhook1, message)
   
     def send_deal(self, dealInfo):
-        stock = dealInfo['m_strProductName']
-        price = dealInfo['m_dPrice']
-        amount = dealInfo['m_dTradeAmount']
+        stock = dealInfo.m_strProductName
+        price = dealInfo.m_dPrice
+        amount = dealInfo.m_dTradeAmount
         markdown = f"""
         新增买入股票: <font color='warning'>{stock}</font>
         > 成交价: <font color='warning'>{price}/font>
         > 成交额: <font color='warning'>{amount}</font>
         """
         self.send_message(self.webhook1, markdown)
-
-    def send_positions(self, positions):
-        # stock = position['m_strProductName']
+    
+    def send_account_info(self, context):
+        accounts = get_trade_detail_data(context.account, 'stock', 'account')
+        for dt in accounts:
+            self.sendMsg(f'总资产: {dt.m_dBalance:.2f},\n总市值: {dt.m_dInstrumentValue:.2f},\n' + f'可用金额: {dt.m_dAvailable:.2f},\n盈亏: {dt.m_dPositionProfit:.2f}')
+        
+    def send_positions(self, context):
+        if context.do_back_test:
+            return
+        positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
         df_result = pd.DataFrame(columns=['stock', 'price', 'open_price', 'amount', 'ratio', 'profit'])
         for position in positions:
             df_result = df_result.append({
-            'stock': position['m_strInstrumentName'],
-            'price': position['m_dLastPrice'],
-            'open_price': position['m_dOpenPrice'],
-            'amount': position['m_dMarketValue'],
-            'ratio': position['m_dProfitRate'],
-            'profit': position['m_dFloatProfit'],
+            'stock': position.m_strInstrumentName,
+            'price': position.m_dLastPrice,
+            'open_price': position.m_dOpenPrice,
+            'amount': position.m_dMarketValue,
+            'ratio': position.m_dProfitRate,
+            'profit': position.m_dFloatProfit,
             }, ignore_index=True)
 
         markdown = """
-        ## ?? 股票持仓报告
+        ## 股票持仓报告
         """
         num = len(df_result)
         total_profit = df_result['profit'].sum()
         if total_profit > 0:
-            total_profit = f"<font color='info'>{total_profit}%</font>"
+            total_profit = f"<font color='info'>{total_profit:.2f}</font>"
         else:
-            total_profit = f"<font color='warning'>-{total_profit}%</font>"
+            total_profit = f"<font color='warning'>-{total_profit:.2f}</font>"
 
         for index, row in df_result.iterrows():
             row_str = self.get_position_markdown(row)
@@ -84,8 +110,8 @@ class Messager:
         markdown += f"""
         ---
         **持仓统计**
-        ? 总持仓数：`{num} 只`
-        ? 总盈亏额：{total_profit}
+        总持仓数：{num} 只
+        总盈亏额：{total_profit}
         """
         self.send_message(self.webhook1, markdown)
 
@@ -97,21 +123,21 @@ class Messager:
         ratio = position['ratio']
         ratio_str = ratio * 100
         if ratio_str > 0:
-            ratio_str = f"<font color='info'>{ratio_str}%</font>"
+            ratio_str = f"<font color='info'>{ratio_str:.2f}%</font>"
         else:
-            ratio_str = f"<font color='warning'>-{ratio_str}%</font>"
+            ratio_str = f"<font color='warning'>-{ratio_str:.2f}%</font>"
         profit = position['profit']
         if profit > 0:
-            profit = f"<font color='info'>{profit}%</font>"
+            profit = f"<font color='info'>{profit:.2f}</font>"
         else:
-            profit = f"<font color='warning'>-{profit}%</font>"
+            profit = f"<font color='warning'>-{profit:.2f}</font>"
         return f"""
-        ?? **{stock}**
-        　├─ 当前价：`{price}`
-        　├─ 成本价：`{open_price}`
-        　├─ 持仓额：`￥{amount}`
-        　├─ 盈亏率：`{ratio_str}`
-        　└─ 盈亏额：`￥{profit}`
+    **{stock}**
+    ├─ 当前价：{price:.2f}
+    ├─ 成本价：{open_price:.2f}
+    ├─ 持仓额：{amount:.2f}
+    ├─ 盈亏率：{ratio_str}
+    └─ 盈亏额：{profit}
         """
 messager = Messager()
 class Log:
@@ -132,7 +158,7 @@ class TradingStrategy:
     def __init__(self) -> None:
         # 策略基础配置和状态变量
         self.no_trading_today_signal: bool = False  # 【慎用！！！快捷平仓选项】当天是否执行空仓（资金再平衡）操作
-        self.pass_april: bool = True                # 是否在04月或01月期间执行空仓策略
+        self.pass_april: bool = False                # 是否在04月或01月期间执行空仓策略
         self.run_stoploss: bool = True              # 是否启用止损策略
 
         # 持仓和调仓记录
@@ -160,6 +186,7 @@ class TradingStrategy:
             'risk_level': 'normal'
         }
 
+        self.pool = []
         self.pool_initialized = False
 
     def initialize(self, context: Any) -> None:
@@ -171,28 +198,11 @@ class TradingStrategy:
         参数:
             context: 聚宽平台传入的交易上下文对象
         """
-        # TODO 以下设置需要在iquant上回测时设置
-        # 启用防未来数据以确保历史回测的严谨性
-        # set_option('avoid_future_data', True)
-        # 设置策略基准为上证指数
-        # set_benchmark('000001.XSHG')
-        # 使用真实市场价格，模拟实际交易
-        # set_option('use_real_price', True)
-        # 设置固定滑点，确保价格偏差不大
-        # set_slippage(FixedSlippage(3 / 10000))
-        # 设置订单成本，包括印花税和佣金
-        # set_order_cost(OrderCost(
-        #     open_tax=0,
-        #     close_tax=0.001,  # 卖出时0.1%的印花税
-        #     open_commission=2.5 / 10000,
-        #     close_commission=2.5 / 10000,
-        #     close_today_commission=0,
-        #     min_commission=5  # 最低佣金为5元
-        # ), type='stock')
-        # 设置日志输出等级（中文日志输出）
-        # log.set_level('order', 'error')
-        # log.set_level('system', 'error')
-        # log.set_level('strategy', 'debug')
+        
+        now = datetime.now()
+        context.currentTime = int(now.timestamp() * 1000)
+        context.today = now
+        print(context.today)
         # 注意：调度任务由全局包装函数统一注册，避免 lambda 导致序列化问题
         context.account = MY_ACCOUNT
         context.set_account(context.account)
@@ -240,32 +250,17 @@ class TradingStrategy:
         # 这里给context挂一个positions持仓对象，仅盘前可以复用，盘中要实时取数据不能使用这个
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
 
-        # if not positions:
-        #     print("昨日没有持仓数据。")
-        #     return
+        if not self.positions:
+            print("昨日没有持仓数据。")
+            if not context.do_back_test:
+                messager.sendMsg("今日交易已开始。昨日没有持仓数据。")
+                messager.send_account_info(context)
+            return
 
-        # print("检查每只持仓股票昨日交易数据：")
-        # for position in positions.items():
-        #     stock = self.codeOfPosition(position)
-        #     try:
-        #         # 获取股票昨日的开盘价和收盘价
-        #         df = DataHelper.get_price_safe(
-        #             stock,
-        #             end_date=context.previous_date,
-        #             frequency="daily",
-        #             fields=['open', 'close'],
-        #             count=1,
-        #             panel=False
-        #         )
-        #         if df is None or df.empty:
-        #             print(f"无法获取股票 {stock} 的昨日数据。")
-        #             continue
-        #         open_price: float = df.iloc[0]['open']
-        #         close_price: float = df.iloc[0]['close']
-        #         change_pct: float = (close_price / open_price - 1) * 100
-        #         print(f"股票 {stock}：持仓 {position.total_amount} 股，开盘价 {open_price:.2f}，收盘价 {close_price:.2f}，涨跌幅 {change_pct:.2f}%")
-        #     except Exception as e:
-        #         print(f"处理股票 {stock} 数据时出错: {e}")
+        if not context.do_back_test:
+            messager.send_positions(context)
+            messager.send_account_info(context)
+
 
     # 通用方法，返回给定list里昨日涨跌停的股票
     def find_limit_list(self, context, stock_list):
@@ -399,7 +394,7 @@ class TradingStrategy:
             ['close'],                
             initial_list,
             period="1d",
-            start_time = context.today.strftime('%Y%m%d'),
+            start_time = (context.today - timedelta(days=2)).strftime('%Y%m%d'),
             end_time = context.today.strftime('%Y%m%d'),
             count=1,
             dividend_type = "follow",
@@ -455,14 +450,12 @@ class TradingStrategy:
         
         
         initial_list = initial_list[:100]  # 限制数据规模，防止一次处理数据过大
-        print('初始的100只有吗', initial_list)
         # 性能不好，回测不开
         initial_list = self.filter_limitup_stock(context, initial_list)   # 过滤当日涨停（未持仓时）的股票
         initial_list = self.filter_limitdown_stock(context, initial_list) # 过滤当日跌停（未持仓时）的股票
         
         # 取前2倍目标持仓股票数作为候选池
         final_list: List[str] = initial_list[:2 * self.stock_num]
-
 
         # TODO 增加更多选股因子：30日均成交量（流动性），涨停基因（1年内有过>5次涨停记录）
 
@@ -482,6 +475,13 @@ class TradingStrategy:
         #     for _, row in df_info.iterrows():
         #         print(f"股票 {row['code']}：报告日期 {row.get('pubDate', 'N/A')}，统计日期 {row.get('statDate', 'N/A')}，营业收入 {row.get('operating_revenue', 'N/A')}，EPS {row.get('eps', 'N/A')}")
         return final_list
+    
+    def find_target_stock_list(self, context):
+        self.target_list = self.get_stock_list(context)        
+        target_list: List[str] = self.target_list[:self.stock_num]
+        print('今日股票池:', target_list)
+        for code in target_list:
+            print(context.get_stock_name(code))
 
     def weekly_adjustment(self, context: Any) -> None:
         """
@@ -494,7 +494,6 @@ class TradingStrategy:
         self.hold_list = [self.codeOfPosition(position) for position in self.positions]
         print(self.no_trading_today_signal, '禁止交易信号')
         if not self.no_trading_today_signal:
-            self.not_buy_again = []  # 重置当天已买入记录
             self.target_list = self.get_stock_list(context)
             # 取目标持仓数以内的股票作为调仓目标
             target_list: List[str] = self.target_list[:self.stock_num]
@@ -509,9 +508,11 @@ class TradingStrategy:
 
 
     def weekly_adjustment_buy(self, context: Any) -> None:
+        print('调仓买入阶段...是否在禁止交易窗口：', self.no_trading_today_signal)
         if not self.no_trading_today_signal:
             # 遍历当前持仓，若股票不在目标列表且非昨日涨停，则执行卖出操作
             target_list: List[str] = self.target_list[:self.stock_num]
+            self.not_buy_again = []  # 重置当天已买入记录
 
             # 对目标股票执行买入操作
             self.buy_security(context, target_list)
@@ -528,7 +529,6 @@ class TradingStrategy:
 
         """
         if self.yesterday_HL_list:
-            # ticks = context.get_full_tick(self.yesterday_HL_list)
             ticksOfDay = context.get_market_data_ex(
                 ['close'],                
                 self.yesterday_HL_list,
@@ -608,7 +608,7 @@ class TradingStrategy:
         """
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
         if self.positions:
-            # print(self.positions, '——————————sell_stocks')
+            print('有持仓，检查是否需要止损，当前止损策略:', self.run_stoploss, self.stoploss_strategy)
             if self.run_stoploss:
                 if self.stoploss_strategy == 1:
                     # 个股止盈或止损判断
@@ -616,17 +616,17 @@ class TradingStrategy:
                         pos = self.find_stock_of_positions(stock)
                         if pos.m_dSettlementPrice >= pos.m_dOpenPrice * 2:
                             self.close_position(context, stock)
-                            log.debug(f"股票 {stock} 实现100%盈利，执行止盈卖出。")
+                            print(f"股票 {stock} 实现100%盈利，执行止盈卖出。")
                         elif pos.m_dSettlementPrice < pos.m_dOpenPrice * self.stoploss_limit:
                             self.close_position(context, stock)
-                            log.debug(f"股票 {stock} 触及止损阈值，执行卖出。")
+                            print(f"股票 {stock} 触及止损阈值，执行卖出。")
                             self.reason_to_sell = 'stoploss'
                 elif self.stoploss_strategy == 2:
                     # 大盘止损判断，若整体市场跌幅过大则平仓所有股票
                     down_ratio = self.get_whole_market_data(context)
                     if down_ratio <= self.stoploss_market:
                         self.reason_to_sell = 'stoploss'
-                        log.debug(f"市场检测到跌幅（平均跌幅 {down_ratio}），卖出所有持仓。")
+                        print(f"市场检测到跌幅（平均跌幅 {down_ratio}），卖出所有持仓。")
                         for stock in self.get_stock_list_of_positions(context):
                             self.close_position(context, stock)
                 elif self.stoploss_strategy == 3:
@@ -634,7 +634,7 @@ class TradingStrategy:
                     down_ratio = self.get_whole_market_data(context)
                     if down_ratio <= self.stoploss_market:
                         self.reason_to_sell = 'stoploss'
-                        log.debug(f"市场检测到跌幅（平均跌幅 {down_ratio}），卖出所有持仓。")
+                        print(f"市场检测到跌幅（平均跌幅 {down_ratio}），卖出所有持仓。")
                         for stock in self.get_stock_list_of_positions(context):
                             self.close_position(context, stock)
                     else:
@@ -642,7 +642,7 @@ class TradingStrategy:
                             pos = self.find_stock_of_positions(stock)
                             if pos.m_dSettlementPrice < pos.m_dOpenPrice * self.stoploss_limit:
                                 self.close_position(context, stock)
-                                log.debug(f"股票 {stock} 触及止损，执行卖出。")
+                                print(f"股票 {stock} 触及止损，执行卖出。")
                                 self.reason_to_sell = 'stoploss'
 
     # 判断某只股票是否到达涨停
@@ -823,25 +823,76 @@ class TradingStrategy:
         """
         return [stock for stock in stock_list if stock not in self.not_buy_again]
 
-
-    def open_position(self, context, security: str, value: float) -> bool:
+    # 回测和实盘不一样，回测用目标比例，实盘用可用资金比例。注意这个value传参
+    def open_position_in_test(self, context, security: str, value: float):
+        print("买入股票(回测):", security, context.get_stock_name(security), str(int(value * 100)) + '%')
+        order_target_percent(security, round(value, 2), 'COMPETE', context, context.account)
+    
+    
+    # 实盘的买入非常复杂，需要考虑部分成交的情况，以及长时间委托不成交的情况，这里单开一个函数进行，且进行定时循环调用
+    # 这里有问题，不能和open_position在同一作用域。QMT貌似不支持多线程工作，因此需要整体循环买入后，整体定时检测再撤单。
+    def open_position(self, context, security: str, value: float = 0) -> bool:
         """
-        开仓操作：尝试买入指定股票
+        开仓操作：尝试买入指定股票，支持指定股票数量或者金额
 
         参数:
             security: 股票代码
             value: 分配给该股票的资金
-
-        返回:
-            若下单成功（部分或全部成交）返回 True，否则返回 False
         """
-        print("买入股票:", security, context.get_stock_name(security), int(value * 100))
-        # 该函数回测不生效，暂时注释
+        print("买入股票(实盘):", security, context.get_stock_name(security), value )
+        
+        # 走到这里则为首次下单，直接以目标金额数买入
+        # 1102 表示总资金量下单
+        lastOrderId = str(uuid.uuid4())
+        g.orderIdMap[security] = lastOrderId
+        
+        passorder(23, 1102, context.account, security, 5, -1, value, lastOrderId, 1, lastOrderId, context)
+
+
+    # 轮训检查待买列表状态，进行撤单和重买。直至全部成交
+    def loopCheckBuyListStatus(self, context, num = 0):
         if context.do_back_test:
-            order_target_percent(security, round(value, 2), 'COMPETE', context, context.account)
-        else:
-            # 1113 表示总资金百分比下单
-            passorder(23, 1113, context.account, security, 5, -1, round(value, 2), "买入策略", 1, "", context)
+            return
+        nativeTime.sleep(20)
+        print('每10s检测一下成交状态', num)
+        positions = get_trade_detail_data(context.account, 'stock', 'position')
+        
+        # 委托查询
+        orders = get_trade_detail_data(context.account, 'stock', 'order')
+        # 筛选出目标股票的委托，且处于已报、待报、部成状态的（有未成交且未撤的）
+        # https://dict.thinktrader.net/innerApi/enum_constants.html#enum-eentruststatus-%E5%A7%94%E6%89%98%E7%8A%B6%E6%80%81
+        target_orders = [x for x in orders if x.m_nOrderStatus in [49, 50, 55] ]
+        print(target_orders)
+        if len(target_orders) == 0:
+            print("无待成交委托")
+            return
+        
+        # 先全撤掉
+        for order in target_orders:
+            if order.m_nVolumeTotal > 0:
+                code = self.codeOfPosition(order)
+                cancel(order.m_strOrderSysID, context.account, 'STOCK', context)
+                print(f"{code}未成已撤，数量{order.m_nVolumeTotal}，orderId: {order.m_strOrderSysID}")
+            
+                # 重新委托剩余的量
+                try:
+                    pos = [x for x in positions if self.codeOfPosition(x) == code]
+                    if len(pos) > 0:
+                        posMount = pos[0].m_dMarketValue
+                    else:
+                        posMount = 0
+                except ZeroDivisionError as e:
+                    posMount = 0
+                print(f"{code}持仓数量：", posMount)
+                # 剩余金额 = 委托量 - 目前持仓金额
+                leftMount = g.buyValue - posMount
+                leftMoney = self.get_account_money(context)
+                newId = str(uuid.uuid4())
+                print(f"{code}重新委托，金额{leftMount}， 剩余可用金额{leftMoney}")
+                passorder(23, 1102, context.account, code, 5, -1, leftMount, newId, 1, newId, context)
+                g.orderIdMap[code] = newId
+        # 循环调用自身
+        self.loopCheckBuyListStatus(context, num + 1)
 
     def close_position(self, context, stock: Any) -> bool:
         """
@@ -858,8 +909,18 @@ class TradingStrategy:
                 order_target_value(stock, 0, context, context.account)
             else:
                 # 1123 表示可用股票数量下单，这里表示全卖
-                passorder(24, 1123, context.account, stock, 5, 1, 1, "卖出策略", 1, "", context)
+                # TODO 这里需要实盘验证下传参是否正确，因为1123模式下表示可用，所以传1表示全卖？
+                passorder(24, 1123, context.account, stock, 6, 1, 1, "卖出策略", 1, "", context)
             return True
+
+    # 获取当前账户可用金额
+    def get_account_money(self, context):        
+        accounts = get_trade_detail_data(context.account, 'stock', 'account')
+        money = 0
+        for dt in accounts:
+            money = dt.m_dAvailable
+        return money
+        
 
     def buy_security(self, context: Any, target_list: List[str]) -> None:
         """
@@ -877,20 +938,35 @@ class TradingStrategy:
         print("下单逻辑: 持仓数: ", position_count, "目标数",  target_num)
         if target_num > position_count:
             try:
-                # avalable = TACCOUNT(2, context.account)
-                # value = avalable / (target_num - position_count)
-                value = round(1 / target_num, 2) - 0.01
+                # 回测是目标比例
+                if context.do_back_test:
+                    value = round(1 / target_num, 2) - 0.001
+                    buy_num = 0
+                    for stock in [i for i in target_list if i not in self.hold_list]:
+                        self.open_position_in_test(context, stock, value)
+                        buy_num += 1
+                        if buy_num == target_num - position_count:
+                            break
+                else:
+                    # 实盘是可用比例
+                    value = round(1 /( target_num - position_count), 2) - 0.001                    
+                    buy_num = 0
+                    money = self.get_account_money(context)
+                    # 单支股票需要的买入金额
+                    single_mount = round(money * value, 2)
+                    g.buyValue = single_mount
+                    
+                    for stock in [i for i in target_list if i not in self.hold_list]:
+                        self.open_position(context, stock, single_mount)
+                        buy_num += 1
+                        if buy_num == target_num - position_count:
+                            break
+                    # 下单后，轮训检测状态
+                    self.loopCheckBuyListStatus(context)
             except ZeroDivisionError as e:
                 print(f"资金分摊时除零错误: {e}")
                 return
-            buy_num = 0
-            for stock in [i for i in target_list if i not in self.hold_list]:
-                self.open_position(context, stock, value)
-                # if stock in self.positionsDic.keys() and self.find_stock_of_positions(stock)['m_nVolume'] == 0:
-                buy_num += 1
-                if buy_num == target_num - position_count:
-                    break
-        print("买入完毕.")
+        print("买入委托完毕.")
     def today_is_between(self, context: Any) -> bool:
         """
         判断当前日期是否为资金再平衡（空仓）日，通常在04月或01月期间执行空仓操作
@@ -939,12 +1015,14 @@ class TradingStrategy:
         参数:
             context: 聚宽平台传入的交易上下文对象
         """
+        # TODO 这里其实可以使用持仓统计对象，有更多统计相关数据
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
         self.hold_list = [self.codeOfPosition(position) for position in self.positions]
-        messager.send_positions(self.positions)
 
         if self.positions:
             print(f"********** 持仓信息打印开始 {context.account}**********")
+            messager.send_positions(context)
+            messager.send_account_info(context)
             total = 0
             for position in self.positions:
                 cost: float = position.m_dOpenPrice
@@ -966,6 +1044,8 @@ class TradingStrategy:
             print("********** 持仓信息打印结束 **********")
         else:
             print("**********没有持仓信息**********")
+            messager.sendMsg("持仓状态：空仓")
+
     
     def account_callback(self, context, accountInfo):
         print(accountInfo)
@@ -1075,6 +1155,16 @@ class ScheduledTask:
         except ValueError:
             raise ValueError("Invalid time format, use HH:MM")
 
+class MinuteTask(ScheduledTask):
+    """分钟级别任务"""
+    def should_trigger(self, current_dt):
+        # 生成当日理论执行时间
+        should1 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
+        should2 = current_dt - timedelta(minutes=1) >= self.last_executed        
+        should = should1 and should2
+        # 当前时间已过执行时间 且 超过1分钟
+        return should
+
 class DailyTask(ScheduledTask):
     """每日任务"""
     def should_trigger(self, current_dt):
@@ -1107,7 +1197,7 @@ class TaskRunner:
         self.daily_tasks = []
         self.weekly_tasks = []
         self.context = context
-    
+
     def run_daily(self, time_str, task_func):
         """注册每日任务
         Args:
@@ -1144,10 +1234,25 @@ class TaskRunner:
                 task.last_executed = f"{bar_time.year}-{week_num}"  # (year, week)
 
 
+# TODO 实盘调试代码，开盘时尝试运行进行调试。下面内容都是实时调用，会产生买入和卖出动作。
+def testRunBuy(context):
+    check_holdings_yesterday_func(context)
+    prepare_stock_list_func(context)
+    weekly_adjustment_func(context)
+
+    nativeTime.sleep(5)
+    print('一段时间以后，假设之前的卖出已成交...')
+    print("执行买入逻辑")
+    weekly_adjustment_buy_func(context)
+
+
 def init(context: Any) -> None:
     # 初始化策略环境及参数
     strategy.initialize(context)
     context.runner = TaskRunner(context)
+
+    # 调试代码，实盘调试，慎用！！！！
+    # testRunBuy(context)
 
     # 注册调度任务，所有任务均使用顶层包装函数（不使用 lambda 以确保可序列化）
     
@@ -1174,14 +1279,14 @@ def init(context: Any) -> None:
     else:
         # -------------------每日执行任务 --------------------------------
         # 9am 检查昨日持仓
-        context.run_time("check_holdings_yesterday_func","1nDay","2025-03-0109:00:00","SH")
+        context.run_time("check_holdings_yesterday_func","1nDay","2025-03-0109:15:00","SH")
         # 9:05am 准备股票列表
-        context.run_time("prepare_stock_list_func","1nDay","2025-03-0109:05:00","SH")
+        context.run_time("prepare_stock_list_func","1nDay","2025-03-0109:20:00","SH")
         # 9:30 am 止盈止损检测
         context.run_time("sell_stocks_func","1nDay","2025-03-0109:30:00","SH")
-        # 14:30 pm 检查需要卖出的持仓
+        # 14:30 pm 检查涨停破板，需要卖出的持仓
         context.run_time("trade_afternoon_func","1nDay","2025-03-0114:30:00","SH")
-        # 14:50 pm 检查当日是否需要一键清仓
+        # 14:50 pm 检查当日是否到达空仓日，需要一键清仓
         context.run_time("close_account_func","1nDay","2025-03-0114:50:00","SH")
         # 15:05 pm 每日收盘后打印一次持仓
         context.run_time("print_position_info_func","1nDay","2025-03-0115:05:00","SH")
@@ -1192,6 +1297,8 @@ def init(context: Any) -> None:
         context.run_time("weekly_adjustment_buy_func","7nDay","2025-03-1909:50:00","SH")
 
 
+def checkTask(context):
+    context.runner.check_tasks(context.today)
 
 # 在handlebar函数中调用（假设当前K线时间戳为dt）
 def handlebar(context):
@@ -1212,8 +1319,8 @@ def handlebar(context):
             strategy.get_stock_pool_when_test(context)
 
 def deal_callback(context, dealInfo):
-    stock = dealInfo['m_strInstrumentName']
-    value = dealInfo['m_dTradeAmount']
+    stock = dealInfo.m_strInstrumentName
+    value = dealInfo.m_dTradeAmount
     print(f"已买入股票 {stock}，成交额 {value:.2f}")
     strategy.not_buy_again.append(stock)
     messager.sendLog(f"已买入股票 {stock}，成交额 {value:.2f}")    
@@ -1222,17 +1329,15 @@ def deal_callback(context, dealInfo):
     
 
 def position_callback(context, positionInfo):
-    print("持仓信息变更回调", positionInfo)
-    messager.sendLog("持仓信息变更回调" + str(positionInfo))
+    print("持仓信息变更回调", context.get_stock_name(strategy.codeOfPosition(positionInfo)))
+    messager.sendLog("持仓信息变更回调" + context.get_stock_name(strategy.codeOfPosition(positionInfo)))
     
 def orderError_callback(context, orderArgs, errMsg):
     messager.sendLog(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
     
 def order_callback(context, orderInfo):
-    print("委托信息变更回调", orderInfo)
-    messager.sendLog(f"委托状态变化回调" + str(orderInfo))
+    print("委托信息变更回调", context.get_stock_name(strategy.codeOfPosition(orderInfo)))
+    messager.sendLog(f"委托状态变化回调" + context.get_stock_name(strategy.codeOfPosition(orderInfo)))
     
-
-
 
 
