@@ -853,8 +853,8 @@ class TradingStrategy:
     def loopCheckBuyListStatus(self, context, num = 0):
         if context.do_back_test:
             return
-        nativeTime.sleep(20)
-        print('每10s检测一下成交状态', num)
+        nativeTime.sleep(60)
+        print('每60s检测一下成交状态', num)
         positions = get_trade_detail_data(context.account, 'stock', 'position')
         
         # 委托查询
