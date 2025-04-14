@@ -16,9 +16,9 @@ import time as nativeTime
 
 # 设置账号
 # 腾腾实盘
-# MY_ACCOUNT = "190200051469"
+MY_ACCOUNT = "190200051469"
 # 我的模拟
-MY_ACCOUNT = "620000204906"
+# MY_ACCOUNT = "620000204906"
 
 IS_MOCK = True
 
@@ -60,8 +60,7 @@ class Messager:
         print(message)
 
     def sendMsg(self, message):
-        if is_trading():
-            self.send_message(self.webhook1, message)
+        self.send_message(self.webhook1, message)
   
     def send_deal(self, dealInfo):
         stock = dealInfo.m_strProductName
@@ -168,7 +167,7 @@ class TradingStrategy:
         self.not_buy_again: List[str] = []           # 当天已买入的股票列表，避免重复下单
 
         # 策略交易及风控的参数
-        self.stock_num: int = 7                    # 每次调仓目标持仓股票数量
+        self.stock_num: int = 5                    # 每次调仓目标持仓股票数量
         self.up_price: float = 100.0               # 股票价格上限过滤条件（排除股价超过此值的股票）
         self.reason_to_sell: str = ''              # 记录卖出原因（例如：'limitup' 涨停破板 或 'stoploss' 止损）
         self.stoploss_strategy: int = 3            # 止损策略：1-个股止损；2-大盘止损；3-联合止损策略
@@ -1045,6 +1044,7 @@ class TradingStrategy:
         else:
             print("**********没有持仓信息**********")
             messager.sendMsg("持仓状态：空仓")
+            messager.send_account_info(context)
 
     
     def account_callback(self, context, accountInfo):
@@ -1292,9 +1292,9 @@ def init(context: Any) -> None:
         context.run_time("print_position_info_func","1nDay","2025-03-0115:05:00","SH")
         # -------------------每周执行任务 --------------------------------
         # 09:40 am 每周做一次调仓动作，尽量早，流动性充足
-        context.run_time("weekly_adjustment_func","7nDay","2025-03-1909:40:00","SH")
+        context.run_time("weekly_adjustment_func","7nDay","2025-03-1809:40:00","SH")
         # 09:50 am 每周调仓后买入股票
-        context.run_time("weekly_adjustment_buy_func","7nDay","2025-03-1909:50:00","SH")
+        context.run_time("weekly_adjustment_buy_func","7nDay","2025-03-1809:50:00","SH")
 
 
 def checkTask(context):
