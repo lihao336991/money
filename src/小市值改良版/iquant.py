@@ -1279,22 +1279,22 @@ def init(context: Any) -> None:
     else:
         # -------------------每日执行任务 --------------------------------
         # 9am 检查昨日持仓
-        context.run_time("check_holdings_yesterday_func","1nDay","2025-03-0109:15:00","SH")
+        context.run_time("check_holdings_yesterday_func","1nDay","2025-03-01 09:15:00","SH")
         # 9:05am 准备股票列表
-        context.run_time("prepare_stock_list_func","1nDay","2025-03-0109:20:00","SH")
+        context.run_time("prepare_stock_list_func","1nDay","2025-03-01 09:20:00","SH")
         # 9:30 am 止盈止损检测
-        context.run_time("sell_stocks_func","1nDay","2025-03-0109:30:00","SH")
+        context.run_time("sell_stocks_func","1nDay","2025-03-01 09:30:00","SH")
         # 14:30 pm 检查涨停破板，需要卖出的持仓
-        context.run_time("trade_afternoon_func","1nDay","2025-03-0114:30:00","SH")
+        context.run_time("trade_afternoon_func","1nDay","2025-03-01 14:30:00","SH")
         # 14:50 pm 检查当日是否到达空仓日，需要一键清仓
-        context.run_time("close_account_func","1nDay","2025-03-0114:50:00","SH")
+        context.run_time("close_account_func","1nDay","2025-03-01 14:50:00","SH")
         # 15:05 pm 每日收盘后打印一次持仓
-        context.run_time("print_position_info_func","1nDay","2025-03-0115:05:00","SH")
+        context.run_time("print_position_info_func","1nDay","2025-03-01 15:05:00","SH")
         # -------------------每周执行任务 --------------------------------
         # 09:40 am 每周做一次调仓动作，尽量早，流动性充足
-        context.run_time("weekly_adjustment_func","7nDay","2025-03-1809:40:00","SH")
+        context.run_time("weekly_adjustment_func","7nDay","2025-04-16 09:40:00","SH")
         # 09:50 am 每周调仓后买入股票
-        context.run_time("weekly_adjustment_buy_func","7nDay","2025-03-1809:50:00","SH")
+        context.run_time("weekly_adjustment_buy_func","7nDay","2025-04-16 09:50:00","SH")
 
 
 def checkTask(context):
