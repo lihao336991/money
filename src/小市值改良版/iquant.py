@@ -422,10 +422,20 @@ class TradingStrategy:
                     'lastPrice': ticks[code].iloc[0, 0],
                     'stock_num': stock_num
                     }, ignore_index=True)
-        df_result = df_result.sort_values(by='market_cap', ascending=True)
+        df_result = df_result.sort_values(by='market_cap', ascending=True)  
+        # 缓存df对象，方便查询某只股票数据
+        context.stock_df = df_result
         stock_list: List[str] = list(df_result.code)
         # print("看看前20的股票", df_result[:20])
         return stock_list
+    
+    # 定期获取目标股票列表
+    def internal_get_target_list(self, context: Any) -> List[str]:
+        # 缓存一条离线target_list，调仓日会拿实时数据与之比较，当有较多股票不一致时，发送警告给我
+        context.cache_target_list = self.get_stock_list(context)
+        messager.sendLog("离线调仓数据整理完毕，目标持股列表如下" )
+        self.log_target_list(context.cache_target_list)
+        
 
     def get_stock_list(self, context: Any) -> List[str]:
         """
@@ -482,6 +492,18 @@ class TradingStrategy:
         for code in target_list:
             print(context.get_stock_name(code))
 
+    def log_target_list(self, context: Any, stock_list: List[str]) -> None:
+        """
+        打印目标股票列表信息，用于人工确认程序无误（有时候平台接口抽风，选出来的股票并非小市值）。
+        """
+        print("***** 目标股票池信息如下：******")
+        for code in stock_list:
+            if not context.stock_df[context.stock_df['code'] == code].empty:
+                market_cap = context.stock_df[context.stock_df['code'] == code]['market_cap'].iloc[0]
+            else:
+                market_cap = None  # 或其他默认值
+            print(f"股票代码：{code}，股票名称：{context.get_stock_name(code)}, 市值：{market_cap}")
+
     def weekly_adjustment(self, context: Any) -> None:
         """
         每周调仓策略：
@@ -497,7 +519,19 @@ class TradingStrategy:
             # 取目标持仓数以内的股票作为调仓目标
             target_list: List[str] = self.target_list[:self.stock_num]
             print(f"每周调仓目标股票: {target_list}")
+            self.log_target_list(context, target_list)
             print(f"当前持有股票: {self.hold_list}")
+            
+            # 计算调仓数量并发送告警
+            stocks_to_sell = [stock for stock in self.hold_list if stock not in target_list and stock not in self.yesterday_HL_list]
+            stocks_to_buy = [stock for stock in target_list if stock not in self.hold_list]
+            adjustment_count = len(stocks_to_sell) + len(stocks_to_buy)
+            if adjustment_count > 3:
+                from utils.msg import send_alert
+                alert_msg = f"大规模调仓警告：需调整{adjustment_count}只股票（卖出{len(stocks_to_sell)}只，买入{len(stocks_to_buy)}只）"
+                send_alert(alert_msg)
+                messager.sendLog(alert_msg)
+
             for stock in self.hold_list:
                 if stock not in target_list and stock not in self.yesterday_HL_list:
                     print(f"卖出股票 {stock}")
@@ -930,7 +964,7 @@ class TradingStrategy:
             target_list: 目标股票代码列表
         """
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
-        self.hold_list = [self.codeOfPosition(position) for position in self.positions]
+        self.hold_list = [self.codeOfPosition(position) for position in self.positions if position.m_dMarketValue > 10000]
 
         position_count = len(self.positions)
         target_num = len(target_list)
@@ -1141,6 +1175,15 @@ def print_position_info_func(context: Any) -> None:
         context: 聚宽平台传入的交易上下文对象
     """
     strategy.print_position_info(context)
+    
+def log_target_list_info(context: Any) -> None:
+    """
+    打印目标股票池信息
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    strategy.internal_get_target_list(context)
 
 class ScheduledTask:
     """定时任务基类"""
@@ -1245,7 +1288,6 @@ def testRunBuy(context):
     print("执行买入逻辑")
     weekly_adjustment_buy_func(context)
 
-
 def init(context: Any) -> None:
     # 初始化策略环境及参数
     strategy.initialize(context)
@@ -1290,6 +1332,9 @@ def init(context: Any) -> None:
         context.run_time("close_account_func","1nDay","2025-03-01 14:50:00","SH")
         # 15:05 pm 每日收盘后打印一次持仓
         context.run_time("print_position_info_func","1nDay","2025-03-01 15:05:00","SH")
+        # 15:10 pm 每日收盘后打印一次候选股票池
+        context.run_time("log_target_list_info","1nDay","2025-03-01 15:10:00","SH")
+        
         # -------------------每周执行任务 --------------------------------
         # 09:40 am 每周做一次调仓动作，尽量早，流动性充足
         context.run_time("weekly_adjustment_func","7nDay","2025-04-16 09:40:00","SH")
@@ -1321,9 +1366,9 @@ def handlebar(context):
 def deal_callback(context, dealInfo):
     stock = dealInfo.m_strInstrumentName
     value = dealInfo.m_dTradeAmount
-    print(f"已买入股票 {stock}，成交额 {value:.2f}")
+    print(f"已{dealInfo.m_nDirection}股票 {stock}，成交额 {value:.2f}")
     strategy.not_buy_again.append(stock)
-    messager.sendLog(f"已买入股票 {stock}，成交额 {value:.2f}")    
+    messager.sendLog(f"已{dealInfo.m_nDirection}股票 {stock}，成交额 {value:.2f}")    
     # 回测模式不发
     messager.send_deal(dealInfo)
     
