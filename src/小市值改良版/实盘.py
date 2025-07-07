@@ -434,7 +434,7 @@ class TradingStrategy:
         # 缓存一条离线target_list，调仓日会拿实时数据与之比较，当有较多股票不一致时，发送警告给我
         context.cache_target_list = self.get_stock_list(context)
         messager.sendLog("离线调仓数据整理完毕，目标持股列表如下" )
-        self.log_target_list(context.cache_target_list)
+        self.log_target_list(context.cache_target_list, context.cache_target_list)
         
 
     def get_stock_list(self, context: Any) -> List[str]:
