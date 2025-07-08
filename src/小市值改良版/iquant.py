@@ -434,7 +434,7 @@ class TradingStrategy:
         # 缓存一条离线target_list，调仓日会拿实时数据与之比较，当有较多股票不一致时，发送警告给我
         context.cache_target_list = self.get_stock_list(context)
         messager.sendLog("离线调仓数据整理完毕，目标持股列表如下" )
-        self.log_target_list(context.cache_target_list)
+        self.log_target_list(context, context.cache_target_list)
         
 
     def get_stock_list(self, context: Any) -> List[str]:
@@ -925,7 +925,8 @@ class TradingStrategy:
                 passorder(23, 1102, context.account, code, 5, -1, leftMount, newId, 1, newId, context)
                 g.orderIdMap[code] = newId
         # 循环调用自身
-        self.loopCheckBuyListStatus(context, num + 1)
+        # TODO 撤单后资金没有立刻回账户，这里先不开轮训撤单重报逻辑
+        # self.loopCheckBuyListStatus(context, num + 1)
 
     def close_position(self, context, stock: Any) -> bool:
         """
@@ -995,7 +996,7 @@ class TradingStrategy:
                         if buy_num == target_num - position_count:
                             break
                     # 下单后，轮训检测状态
-                    self.loopCheckBuyListStatus(context)
+                    # self.loopCheckBuyListStatus(context)
             except ZeroDivisionError as e:
                 print(f"资金分摊时除零错误: {e}")
                 return
@@ -1337,9 +1338,9 @@ def init(context: Any) -> None:
         
         # -------------------每周执行任务 --------------------------------
         # 09:40 am 每周做一次调仓动作，尽量早，流动性充足
-        context.run_time("weekly_adjustment_func","7nDay","2025-04-16 09:40:00","SH")
+        context.run_time("weekly_adjustment_func","7nDay","2025-05-08 09:40:00","SH")
         # 09:50 am 每周调仓后买入股票
-        context.run_time("weekly_adjustment_buy_func","7nDay","2025-04-16 09:50:00","SH")
+        context.run_time("weekly_adjustment_func","7nDay","2025-05-08 09:50:00","SH")
 
 
 def checkTask(context):
