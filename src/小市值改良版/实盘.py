@@ -499,10 +499,10 @@ class TradingStrategy:
         print("***** 目标股票池信息如下：******")
         for code in stock_list:
             if not context.stock_df[context.stock_df['code'] == code].empty:
-                market_cap = context.stock_df[context.stock_df['code'] == code]['market_cap'].iloc[0]
+                market_cap = context.stock_df[context.stock_df['code'] == code]['market_cap'].iloc[0] / 100000000
             else:
                 market_cap = None  # 或其他默认值
-            print(f"股票代码：{code}，股票名称：{context.get_stock_name(code)}, 市值：{market_cap}")
+            messager.sendLog(f"股票代码：{code}，股票名称：{context.get_stock_name(code)}, 市值：{market_cap:.2f}")
 
     def weekly_adjustment(self, context: Any) -> None:
         """
@@ -527,9 +527,7 @@ class TradingStrategy:
             stocks_to_buy = [stock for stock in target_list if stock not in self.hold_list]
             adjustment_count = len(stocks_to_sell) + len(stocks_to_buy)
             if adjustment_count > 3:
-                from utils.msg import send_alert
                 alert_msg = f"大规模调仓警告：需调整{adjustment_count}只股票（卖出{len(stocks_to_sell)}只，买入{len(stocks_to_buy)}只）"
-                send_alert(alert_msg)
                 messager.sendLog(alert_msg)
 
             for stock in self.hold_list:
