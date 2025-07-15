@@ -1059,7 +1059,7 @@ class TradingStrategy:
             for position in self.positions:
                 cost: float = position.m_dOpenPrice
                 price: float = position.m_dLastPrice
-                ret: float = 100 * (price / cost - 1)
+                ret: float = 100 * (price / cost - 1) if cost != 0 else 0.0  # 避免除以零错误
                 value: float = position.m_dMarketValue
                 amount: int = position.m_nVolume
                 code = self.codeOfPosition(position)
@@ -1079,11 +1079,6 @@ class TradingStrategy:
             messager.sendMsg("持仓状态：空仓")
             messager.send_account_info(context)
 
-    
-    def account_callback(self, context, accountInfo):
-        print(accountInfo)
-        context.accountInfo = accountInfo
-        return accountInfo
 
 # 创建全局策略实例，策略入口处使用该实例
 strategy = TradingStrategy()
@@ -1372,10 +1367,6 @@ def deal_callback(context, dealInfo):
     messager.send_deal(dealInfo)
     
 
-def position_callback(context, positionInfo):
-    print("持仓信息变更回调", context.get_stock_name(strategy.codeOfPosition(positionInfo)))
-    messager.sendLog("持仓信息变更回调" + context.get_stock_name(strategy.codeOfPosition(positionInfo)))
-    
 def orderError_callback(context, orderArgs, errMsg):
     messager.sendLog(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
     
