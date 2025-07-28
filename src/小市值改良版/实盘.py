@@ -470,19 +470,6 @@ class TradingStrategy:
 
         print(f"候选股票{len(final_list)}只: {final_list}")
 
-        # 下面注释部分不参与实际功能，只是日志打印，暂时忽略
-        # 查询并输出候选股票的财务信息（如财报日期、营业收入、EPS）
-        # if final_list:
-        #     info_query = query(
-        #         valuation.code,
-        #         income.pubDate,
-        #         income.statDate,
-        #         income.operating_revenue,
-        #         indicator.eps
-        #     ).filter(valuation.code.in_(final_list))
-        #     df_info = get_fundamentals(info_query)
-        #     for _, row in df_info.iterrows():
-        #         print(f"股票 {row['code']}：报告日期 {row.get('pubDate', 'N/A')}，统计日期 {row.get('statDate', 'N/A')}，营业收入 {row.get('operating_revenue', 'N/A')}，EPS {row.get('eps', 'N/A')}")
         return final_list
     
     def find_target_stock_list(self, context):
@@ -512,12 +499,13 @@ class TradingStrategy:
 
         """
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
-        self.hold_list = [self.codeOfPosition(position) for position in self.positions]
+        self.hold_list = [self.codeOfPosition(position) for position in self.positions if position.m_dMarketValue > 10000]
         print(self.no_trading_today_signal, '禁止交易信号')
         if not self.no_trading_today_signal:
             self.target_list = self.get_stock_list(context)
             # 取目标持仓数以内的股票作为调仓目标
             target_list: List[str] = self.target_list[:self.stock_num]
+            self.target_list = target_list
             print(f"每周调仓目标股票: {target_list}")
             self.log_target_list(context, target_list)
             print(f"当前持有股票: {self.hold_list}")
@@ -525,9 +513,11 @@ class TradingStrategy:
             # 计算调仓数量并发送告警
             stocks_to_sell = [stock for stock in self.hold_list if stock not in target_list and stock not in self.yesterday_HL_list]
             stocks_to_buy = [stock for stock in target_list if stock not in self.hold_list]
+            self.stocks_to_buy = stocks_to_buy
             adjustment_count = len(stocks_to_sell) + len(stocks_to_buy)
             if adjustment_count > 3:
-                alert_msg = f"大规模调仓警告：需调整{adjustment_count}只股票（卖出{len(stocks_to_sell)}只，买入{len(stocks_to_buy)}只）"
+                # 显示具体股票代码而非仅数量
+                alert_msg = f"大规模调仓警告：需调整{adjustment_count}只股票（卖出{len(stocks_to_sell)}只: {', '.join(stocks_to_sell)}, 买入{len(stocks_to_buy)}只: {', '.join(stocks_to_buy)}）"
                 messager.sendLog(alert_msg)
 
             for stock in self.hold_list:
@@ -537,21 +527,15 @@ class TradingStrategy:
                 else:
                     print(f"持有股票 {stock}")
 
-
     def weekly_adjustment_buy(self, context: Any) -> None:
         print('调仓买入阶段...是否在禁止交易窗口：', self.no_trading_today_signal)
         if not self.no_trading_today_signal:
             # 遍历当前持仓，若股票不在目标列表且非昨日涨停，则执行卖出操作
             target_list: List[str] = self.target_list[:self.stock_num]
-            self.not_buy_again = []  # 重置当天已买入记录
 
             # 对目标股票执行买入操作
-            self.buy_security(context, target_list)
-            if self.positions:
-                # 更新当天已买入记录，防止重复买入
-                for position in self.positions:
-                    if self.codeOfPosition(position) not in self.not_buy_again:
-                        self.not_buy_again.append(self.codeOfPosition(position))
+            # self.buy_security(context, target_list)
+            self.new_buy_target(context)
 
     def check_limit_up(self, context: Any) -> None:
         """
@@ -879,53 +863,6 @@ class TradingStrategy:
         
         passorder(23, 1102, context.account, security, 5, -1, value, lastOrderId, 1, lastOrderId, context)
 
-
-    # 轮训检查待买列表状态，进行撤单和重买。直至全部成交
-    def loopCheckBuyListStatus(self, context, num = 0):
-        if context.do_back_test:
-            return
-        nativeTime.sleep(20)
-        print('每10s检测一下成交状态', num)
-        positions = get_trade_detail_data(context.account, 'stock', 'position')
-        
-        # 委托查询
-        orders = get_trade_detail_data(context.account, 'stock', 'order')
-        # 筛选出目标股票的委托，且处于已报、待报、部成状态的（有未成交且未撤的）
-        # https://dict.thinktrader.net/innerApi/enum_constants.html#enum-eentruststatus-%E5%A7%94%E6%89%98%E7%8A%B6%E6%80%81
-        target_orders = [x for x in orders if x.m_nOrderStatus in [49, 50, 55] ]
-        print(target_orders)
-        if len(target_orders) == 0:
-            print("无待成交委托")
-            return
-        
-        # 先全撤掉
-        for order in target_orders:
-            if order.m_nVolumeTotal > 0:
-                code = self.codeOfPosition(order)
-                cancel(order.m_strOrderSysID, context.account, 'STOCK', context)
-                print(f"{code}未成已撤，数量{order.m_nVolumeTotal}，orderId: {order.m_strOrderSysID}")
-            
-                # 重新委托剩余的量
-                try:
-                    pos = [x for x in positions if self.codeOfPosition(x) == code]
-                    if len(pos) > 0:
-                        posMount = pos[0].m_dMarketValue
-                    else:
-                        posMount = 0
-                except ZeroDivisionError as e:
-                    posMount = 0
-                print(f"{code}持仓数量：", posMount)
-                # 剩余金额 = 委托量 - 目前持仓金额
-                leftMount = g.buyValue - posMount
-                leftMoney = self.get_account_money(context)
-                newId = str(uuid.uuid4())
-                print(f"{code}重新委托，金额{leftMount}， 剩余可用金额{leftMoney}")
-                passorder(23, 1102, context.account, code, 5, -1, leftMount, newId, 1, newId, context)
-                g.orderIdMap[code] = newId
-        # 循环调用自身
-        # TODO 撤单后资金没有立刻回账户，这里先不开轮训撤单重报逻辑
-        # self.loopCheckBuyListStatus(context, num + 1)
-
     def close_position(self, context, stock: Any) -> bool:
         """
         平仓操作：尽可能将指定股票仓位全部卖出
@@ -941,7 +878,7 @@ class TradingStrategy:
                 order_target_value(stock, 0, context, context.account)
             else:
                 # 1123 表示可用股票数量下单，这里表示全卖
-                # TODO 这里需要实盘验证下传参是否正确，因为1123模式下表示可用，所以传1表示全卖？
+                # 这里实盘已经验证传参正确，因为1123模式下表示可用比例，所以传1表示全卖
                 passorder(24, 1123, context.account, stock, 6, 1, 1, "卖出策略", 1, "", context)
             return True
 
@@ -960,12 +897,12 @@ class TradingStrategy:
 
         参数:
             context: 聚宽平台传入的交易上下文对象
-            target_list: 目标股票代码列表
+            target_list: 要买的股票代码列表
         """
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
         self.hold_list = [self.codeOfPosition(position) for position in self.positions if position.m_dMarketValue > 10000]
 
-        position_count = len(self.positions)
+        position_count = len(self.hold_list)
         target_num = len(target_list)
         print("下单逻辑: 持仓数: ", position_count, "目标数",  target_num)
         if target_num > position_count:
@@ -993,12 +930,29 @@ class TradingStrategy:
                         buy_num += 1
                         if buy_num == target_num - position_count:
                             break
-                    # 下单后，轮训检测状态
-                    # self.loopCheckBuyListStatus(context)
             except ZeroDivisionError as e:
                 print(f"资金分摊时除零错误: {e}")
                 return
         print("买入委托完毕.")
+        
+    
+    def new_buy_target(self, context: Any):
+        """
+        新的买入目标：根据当前持仓和目标股票列表，计算新的买入目标股票列表
+
+        参数:
+            context: 聚宽平台传入的交易上下文对象
+        """
+        target_num = len(self.stocks_to_buy)
+        value = round(1 /target_num, 2) - 0.001                    
+        money = self.get_account_money(context)
+        print("新的买入目标：", self.stocks_to_buy, "单支买入：", value)
+        # # 单支股票需要的买入金额
+        single_mount = round(money * value, 2)
+        for stock in self.stocks_to_buy:
+            self.open_position(context, stock, single_mount)
+
+    
     def today_is_between(self, context: Any) -> bool:
         """
         判断当前日期是否为资金再平衡（空仓）日，通常在04月或01月期间执行空仓操作
