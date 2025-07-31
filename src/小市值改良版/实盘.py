@@ -1287,7 +1287,7 @@ def init(context: Any) -> None:
         # 09:40 am 每周做一次调仓动作，尽量早，流动性充足
         context.run_time("weekly_adjustment_func","7nDay","2025-05-08 09:40:00","SH")
         # 09:50 am 每周调仓后买入股票
-        context.run_time("weekly_adjustment_func","7nDay","2025-05-08 09:50:00","SH")
+        context.run_time("weekly_adjustment_buy_func","7nDay","2025-05-08 09:50:00","SH")
 
 
 def checkTask(context):
