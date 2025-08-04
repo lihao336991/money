@@ -8,7 +8,13 @@ def init(ContextInfo):
     account = '620000369618'
     ContextInfo.set_account(account)
 
+def bar_time(ContextInfo):    
+    index = ContextInfo.barpos
+    currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
+    return pd.to_datetime(currentTime, unit='ms')
+
 def handlebar(ContextInfo):
+    print(bar_time(ContextInfo))
     # 初始化-获取A股所有股票
     allStocks = ContextInfo.get_stock_list_in_sector('沪深A股')
     if not allStocks:

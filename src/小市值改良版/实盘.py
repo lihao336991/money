@@ -39,7 +39,11 @@ class Messager:
         self.webhook1 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=6c1bd45a-74a7-4bd0-93ce-00b2e7157adc'
         # 日志记录
         self.webhook2 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a1f9970c-4914-49de-b69a-e447a5d97c64'
+    def set_is_test(self, is_test):
+        self.is_test = is_test
     def send_message(self, webhook, message):
+        if self.is_test:
+            return
         # 设置企业微信机器人的Webhook地址
         headers = {'Content-Type': 'application/json; charset=UTF-8'}
         data = {
@@ -944,6 +948,8 @@ class TradingStrategy:
             context: 聚宽平台传入的交易上下文对象
         """
         target_num = len(self.stocks_to_buy)
+        if target_num == 0:
+            return
         value = round(1 /target_num, 2) - 0.001                    
         money = self.get_account_money(context)
         print("新的买入目标：", self.stocks_to_buy, "单支买入：", value)
@@ -1240,7 +1246,7 @@ def init(context: Any) -> None:
     # 初始化策略环境及参数
     strategy.initialize(context)
     context.runner = TaskRunner(context)
-
+    messager.set_is_test(context.do_back_test)
     # 调试代码，实盘调试，慎用！！！！
     # testRunBuy(context)
 
