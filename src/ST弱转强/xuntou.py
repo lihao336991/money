@@ -10,15 +10,19 @@ class G():pass
 g = G()
 g.stock_num = 4
 
+
 def init(ContextInfo):
-    account = '620000369618'
-    ContextInfo.set_account(account)
+    # account = '620000369618'
+    # 李浩 股票账户
+    ContextInfo.account = '620000204906'
+    ContextInfo.set_account(ContextInfo.account)
     ContextInfo.runner = TaskRunner(ContextInfo)
     
     # 定时任务设定
     if ContextInfo.do_back_test:
-        ContextInfo.runner.run_daily("9:20", prepare)
-        ContextInfo.runner.run_daily("9:30", buy)
+        print('doing test')
+        ContextInfo.runner.run_daily("9:30", prepare)
+        ContextInfo.runner.run_daily("9:31", buy)
         ContextInfo.runner.run_daily("13:00", sell)
         
     else:
@@ -28,17 +32,22 @@ def init(ContextInfo):
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:55:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:30:00","SH")
 
-def bar_time(ContextInfo):    
+def handlebar(ContextInfo):
+    # 新增属性，快捷获取当前日期
     index = ContextInfo.barpos
     currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
     ContextInfo.currentTime = currentTime
     ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
-    return pd.to_datetime(currentTime, unit='ms')
 
-def handlebar(ContextInfo):
-    print(bar_time(ContextInfo))
-
+    if (datetime.datetime.now() - datetime.timedelta(days=1) > ContextInfo.today) and not ContextInfo.do_back_test:
+        # print('非回测模式，历史不处理')
+        return
+    else:
+        # 检查并执行任务
+        ContextInfo.runner.check_tasks(ContextInfo.today)
+        
 def prepare(ContextInfo):
+    print('prepare', ContextInfo.today)
     # 初始化-获取A股所有股票
     allStocks = ContextInfo.get_stock_list_in_sector('沪深A股')
     if not allStocks:
@@ -76,7 +85,9 @@ def prepare(ContextInfo):
     # RZQ筛选- 昨日不涨停且前日涨停
     rzqStockList = []    
     if fStockList:
-        rzqStockList = rzq_list(ContextInfo, fStockList)
+
+        rzqStockList = rzq_list_new(ContextInfo, fStockList)
+        # rzqStockList = rzq_list(ContextInfo, fStockList)
         for code in rzqStockList:
             print(f"股票代码：{code}，通过RZQ验证")
     else:
@@ -466,6 +477,48 @@ def get_previous_trading_day(ContextInfo, current_date):
                 print(f"【交易日判断】备用逻辑 - 超过30天未找到交易日")
                 return current_date - datetime.timedelta(days=30)
 
+def rzq_list_new(ContextInfo, initial_list):
+    # 查询持仓昨日信息
+    ticksOfDay = ContextInfo.get_market_data_ex(
+        [],                
+        initial_list,
+        period="1d",
+        start_time = (ContextInfo.today - datetime.timedelta(days=14)).strftime('%Y%m%d'),
+        end_time = ContextInfo.today.strftime('%Y%m%d'),
+        count=4, # 取日线4根k线，大前天，前天，昨天，今天。足以判断前两天的涨停情况
+        dividend_type = "follow",
+        fill_data = True,
+        subscribe = False
+    )
+    target = []
+    for stock in initial_list:
+        print('单个股票的day data', ticksOfDay[stock])
+        # 昨日收盘价
+        lastClose = ticksOfDay[stock]["close"].iloc[-2]
+        # 前日收盘价
+        last2dClose = ticksOfDay[stock]["close"].iloc[-3]
+        # 大前日收盘价
+        last3dClose = ticksOfDay[stock]["close"].iloc[-4]
+        # 前天涨停价
+        last2dHighLimit = get_limit_of_stock(last3dClose)[0]
+        # 昨天涨停价
+        last1dHighLimit = get_limit_of_stock(last2dClose)[0]
+
+        last1dIsHL = lastClose >= last1dHighLimit
+        last2dIsHL = last2dClose >= last2dHighLimit
+        if last2dIsHL and not last1dIsHL:
+            target.append(stock)
+
+        print('前日收盘价', last2dClose)
+        print('昨日收盘价', lastClose)
+        print('大前日收盘价', last3dClose)
+        print('前天涨停价', last2dHighLimit)
+        print('昨天涨停价', last1dHighLimit)
+        print('昨日是否涨停', last1dIsHL)
+        print('前日是否涨停', last2dIsHL)
+    return target
+
+
 
 def rzq_list(ContextInfo, initial_list):
     """筛选昨日不涨停但前日涨停的股票"""
@@ -662,43 +715,78 @@ def get_turnover_stocks(ContextInfo, stk_list, date):
         print(f"【换手率筛选】错误: {str(e)}")
         return []
 
-def codeOfPosition(ContextInfo, position):
+def codeOfPosition(position):
     return position.m_strInstrumentID + '.' + position.m_strExchangeID
 
 # 根据股票代码和收盘价，计算次日涨跌停价格
-def get_limit_of_stock(ContextInfo, last_close):
+def get_limit_of_stock(last_close):
     return [round(last_close * 1.05, 2), round(last_close * 0.95), 2]
 
 # 买入函数
 def buy(ContextInfo):
     positions = get_trade_detail_data(ContextInfo.account, 'STOCK', 'POSITION')
     hold_list = [codeOfPosition(position) for position in positions if position.m_dMarketValue > 1000]
-    target=g.today_list
-    if len(target)==0:
+    today_list=g.today_list
+    if len(today_list)==0:
         return
     ticksOfDay = ContextInfo.get_market_data_ex(
-        ['close'],                
-        list,
+        [],                
+        today_list,
         period="1d",
-        start_time = (ContextInfo.today - timedelta(days=1)).strftime('%Y%m%d'),
+        start_time = (ContextInfo.today - datetime.timedelta(days=1)).strftime('%Y%m%d'),
         end_time = ContextInfo.today.strftime('%Y%m%d'),
         count=1,
         dividend_type = "follow",
         fill_data = True,
-        subscribe = ~ContextInfo.do_back_test
+        subscribe = False
     )
     ticksData = ContextInfo.get_market_data_ex(
-        ['lastPrice', 'open'],
-        list,
-        period="tick",
+        [],
+        today_list,
+        period="1m",
+        start_time = (ContextInfo.today - datetime.timedelta(days=1)).strftime('%Y%m%d%H%M%S'),
+        end_time = ContextInfo.today.strftime('%Y%m%d%H%M%S'),
         count=1,
         dividend_type = "follow",
         fill_data = True,
-        subscribe = ~ContextInfo.do_back_test
+        subscribe = True
     )
-    ticksData = ticksData[(ticksData['lastPrice']/ticksOfDay['close'])< 1.015] 
-    ticksData = ticksData[(ticksData['lastPrice']/ticksOfDay['close'])>0.951]
-    target = list(ticksData.index)
+    
+    target = []
+    # 遍历股票代码进行双数据源校验
+    for stock in today_list:
+        try:
+            # 获取tick数据和日线数据
+            tick_price = ticksData[stock]["close"].iloc[0]
+            day_close = ticksOfDay[stock]["close"].iloc[0]
+            
+            # 计算价格波动比例
+            price_ratio = tick_price / day_close
+            print('看看波动', stock, tick_price, day_close, price_ratio)
+
+            # 执行筛选条件
+            if 0.951 < price_ratio < 1.015:
+                target.append(stock)
+                
+        except KeyError as e:
+            print(f"股票{stock}数据异常: {str(e)}")
+        except Exception as e:
+            print(f"处理{stock}时发生错误: {str(e)}")
+
+    # 数据校验（处理空数据情况）
+    # 修正字典类型判空方式
+    if not ticksData or not ticksOfDay:
+        print("行情数据为空，终止处理")
+        return
+    
+    # 获取交集索引
+    # 字典结构处理交集
+    common_stocks = list(set(ticksData.keys()) & set(ticksOfDay.keys()))
+    if len(common_stocks) == 0:
+        print("无共同标的股票")
+        return
+    
+
     print('当日开盘筛选后股票池:', target)
     if len(target)==0:
         return
@@ -712,49 +800,60 @@ def buy(ContextInfo):
         single_mount = round(money * value, 2)
         for stock in target:
             if ContextInfo.do_back_test:
-                open_position_in_test(ContextInfo, stock, round(1 / len(g.stock_num), 2) - 0.001)
+                open_position_in_test(ContextInfo, stock, round(1 / g.stock_num, 2) - 0.001)
             else:
                 open_position(ContextInfo, stock, single_mount)
 
 # 卖出函数
 def sell(ContextInfo):
     positions = get_trade_detail_data(ContextInfo.account, 'STOCK', 'POSITION')
-    hold_list = [codeOfPosition(position) for position in positions if position.m_dMarketValue > 1000]
+    hold_list = [codeOfPosition(position) for position in positions if position.m_nCanUseVolume > 1000]
     if hold_list:
         # 查询持仓昨日信息
         ticksOfDay = ContextInfo.get_market_data_ex(
-            ['close'],                
-            list,
+            [],                
+            hold_list,
             period="1d",
-            start_time = (ContextInfo.today - timedelta(days=1)).strftime('%Y%m%d'),
+            start_time = (ContextInfo.today - datetime.timedelta(days=14)).strftime('%Y%m%d'),
             end_time = ContextInfo.today.strftime('%Y%m%d'),
             count=3,
             dividend_type = "follow",
             fill_data = True,
-            subscribe = ~ContextInfo.do_back_test
+            subscribe = False
         )
         ticksData = ContextInfo.get_market_data_ex(
-            ['lastPrice'],                
-            list,
-            period="tick",
+            [],                
+            hold_list,
+            period="1m",
+            start_time = (ContextInfo.today - datetime.timedelta(days=1)).strftime('%Y%m%d%H%M%S'),
+            end_time = ContextInfo.today.strftime('%Y%m%d%H%M%S'),
             count=1,
             dividend_type = "follow",
             fill_data = True,
-            subscribe = ~ContextInfo.do_back_test
+            subscribe = False
         )
-        for stock in list:
+        for stock in hold_list:
+            print('单个股票的tick data', ticksData[stock])
+            print('单个股票的day data', ticksOfDay[stock])
             # 最新价
-            lastPrice = ticksData[stock]["lastPrice"].iloc[0]
+            lastPrice = ticksData[stock]["close"].iloc[0]
             # 前日收盘价
-            last2dClose = ticksOfDay[stock]["close"].iloc[0]
+            last2dClose = ticksOfDay[stock]["close"].iloc[-3]
             # 昨日收盘价
-            lastClose = ticksOfDay[stock]["close"].iloc[1]
+            lastClose = ticksOfDay[stock]["close"].iloc[-2]
+            print('最新价', lastPrice)
+            print('前日收盘价', last2dClose)
+            print('昨日收盘价', lastClose)
+
+
             # 昨涨停价
             yeserday_high_limit = get_limit_of_stock(last2dClose)[0]
             # 今涨停价
             high_limit = get_limit_of_stock(lastClose)[0]
             # 盈亏比例
-            profit = positions[stock].m_dProfitRate
+            position = find_stock_of_positions(positions, stock)
+            profit = position.m_dProfitRate
+            print('持仓信息', stock, profit)
 
             # 条件1：今天未涨停
             cond1 = lastPrice < high_limit
@@ -788,7 +887,7 @@ class ScheduledTask:
     def _parse_time(self, time_str):
         """将HH:MM格式字符串转换为time对象"""
         try:
-            return datetime.strptime(time_str, "%H:%M").time()
+            return datetime.datetime.strptime(time_str, "%H:%M").time()
         except ValueError:
             raise ValueError("Invalid time format, use HH:MM")
 
@@ -796,8 +895,8 @@ class MinuteTask(ScheduledTask):
     """分钟级别任务"""
     def should_trigger(self, current_dt):
         # 生成当日理论执行时间
-        should1 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
-        should2 = current_dt - timedelta(minutes=1) >= self.last_executed        
+        should1 = current_dt.time() >= datetime.datetime.combine(current_dt.date(), self.execution_time).time()
+        should2 = current_dt - datetime.timedelta(minutes=1) >= self.last_executed        
         should = should1 and should2
         # 当前时间已过执行时间 且 超过1分钟
         return should
@@ -807,7 +906,7 @@ class DailyTask(ScheduledTask):
     """每日任务"""
     def should_trigger(self, current_dt):
         # 生成当日理论执行时间
-        should1 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
+        should1 = current_dt.time() >= datetime.datetime.combine(current_dt.date(), self.execution_time).time()
         should2 = self.last_executed != current_dt.date()
         should = should1 and should2
         # 当前时间已过执行时间 且 当日未执行
@@ -904,3 +1003,11 @@ def open_position(context, security: str, value: float = 0) -> bool:
     lastOrderId = str(uuid.uuid4())
     g.orderIdMap[security] = lastOrderId
     passorder(23, 1102, context.account, security, 5, -1, value, lastOrderId, 1, lastOrderId, context)
+
+
+def find_stock_of_positions(positions, stock):
+    result = [position for position in positions if codeOfPosition(position) == stock]
+    if result:
+        print('有持仓', stock, result[0])
+
+        return result[0]
