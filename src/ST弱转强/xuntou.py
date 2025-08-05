@@ -7,14 +7,29 @@ import time
 def init(ContextInfo):
     account = '620000369618'
     ContextInfo.set_account(account)
+    ContextInfo.runner = TaskRunner(ContextInfo)
+    
+    # 定时任务设定
+    if ContextInfo.do_back_test:
+        ContextInfo.runner.run_daily("9:20", prepare)
+
+        ContextInfo.runner.run_daily("13:00", sell)
+        
+    else:
+        ContextInfo.run_time("prepare","1nDay","2025-08-01 09:20:00","SH")
+        ContextInfo.run_time("sell","1nDay","2025-08-01 13:00:00","SH")
 
 def bar_time(ContextInfo):    
     index = ContextInfo.barpos
     currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
+    ContextInfo.currentTime = currentTime
+    ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
     return pd.to_datetime(currentTime, unit='ms')
 
 def handlebar(ContextInfo):
     print(bar_time(ContextInfo))
+
+def prepare(ContextInfo):
     # 初始化-获取A股所有股票
     allStocks = ContextInfo.get_stock_list_in_sector('沪深A股')
     if not allStocks:
@@ -79,8 +94,6 @@ def handlebar(ContextInfo):
     else:
         print("\nRZQ筛选后无股票，跳过换手率筛选")
         
-    # todo 买卖函数 + run_time    
-
 
 # 以下为原有函数（保持不变）
 def GJT_filter_stocks(ContextInfo, stockCode):
@@ -637,20 +650,169 @@ def get_turnover_stocks(ContextInfo, stk_list, date):
         print(f"【换手率筛选】错误: {str(e)}")
         return []
 
+def codeOfPosition(ContextInfo, position):
+    return position.m_strInstrumentID + '.' + position.m_strExchangeID
 
-# 回调函数保持不变
-def account_callback(ContextInfo, accountInfo):
-    pass
+# 根据股票代码和收盘价，计算次日涨跌停价格
+def get_limit_of_stock(ContextInfo, last_close):
+    return [round(last_close * 1.05, 2), round(last_close * 0.95), 2]
 
-def task_callback(ContextInfo, taskInfo):
-    pass
+def sell(ContextInfo):
+    positions = get_trade_detail_data(ContextInfo.account, 'STOCK', 'POSITION')
+    hold_list = [codeOfPosition(position) for position in positions if position.m_dMarketValue > 1000]
+    if hold_list:
+        # 查询持仓昨日信息
+        ticksOfDay = ContextInfo.get_market_data_ex(
+            ['close'],                
+            list,
+            period="1d",
+            start_time = (ContextInfo.today - timedelta(days=1)).strftime('%Y%m%d'),
+            end_time = ContextInfo.today.strftime('%Y%m%d'),
+            count=3,
+            dividend_type = "follow",
+            fill_data = True,
+            subscribe = ~ContextInfo.do_back_test
+        )
+        ticksData = ContextInfo.get_market_data_ex(
+            ['lastPrice'],                
+            list,
+            period="tick",
+            count=1,
+            dividend_type = "follow",
+            fill_data = True,
+            subscribe = ~ContextInfo.do_back_test
+        )
+        for stock in list:
+            # 最新价
+            lastPrice = ticksData[stock]["lastPrice"].iloc[0]
+            # 前日收盘价
+            last2dClose = ticksOfDay[stock]["close"].iloc[0]
+            # 昨日收盘价
+            lastClose = ticksOfDay[stock]["close"].iloc[1]
+            # 昨涨停价
+            yeserday_high_limit = get_limit_of_stock(last2dClose)[0]
+            # 今涨停价
+            high_limit = get_limit_of_stock(lastClose)[0]
+            # 盈亏比例
+            profit = positions[stock].m_dProfitRate
 
-def order_callback(ContextInfo, orderInfo):
-    pass
+            # 条件1：今天未涨停
+            cond1 = lastPrice < high_limit
+            # 条件2.1：亏损超过3%（矩阵运算）
+            ret_matrix = profit * 100
+            #cond2_0 = ret_matrix >= 10
+            cond2_1 = ret_matrix < -3
+            # 条件2.2：盈利超过0%（复用矩阵）
+            cond2_2 = ret_matrix >= 0
+            # 条件2.4：昨日涨停（批量计算）
+            cond2_4 = lastClose == yeserday_high_limit
+            #正常止盈止损
+            sell_condition = cond1 &(cond2_1 | cond2_2 | cond2_4)
+            
+            # 需要卖出
+            if sell_condition:
+                print('需要卖出:', stock)
+                if ContextInfo.do_back_test:
+                    order_target_value(stock, 0, ContextInfo, ContextInfo.account)
+                else:
+                    # 1123 表示可用股票数量下单，这里表示全卖
+                    # 这里实盘已经验证传参正确，因为1123模式下表示可用比例，所以传1表示全卖
+                    passorder(24, 1123, ContextInfo.account, stock, 6, 1, 1, "卖出策略", 1, "", ContextInfo)
+                    
+                    
+                    
+                    
+                    
+
+class ScheduledTask:
+    """定时任务基类"""
+    def __init__(self, execution_time):
+        self.last_executed = None
+        self.execution_time = self._parse_time(execution_time)
     
-def deal_callback(ContextInfo, dealInfo):
-    pass
-   
-def position_callback(ContextInfo, positonInfo):
-    pass
+    def _parse_time(self, time_str):
+        """将HH:MM格式字符串转换为time对象"""
+        try:
+            return datetime.strptime(time_str, "%H:%M").time()
+        except ValueError:
+            raise ValueError("Invalid time format, use HH:MM")
+
+class MinuteTask(ScheduledTask):
+    """分钟级别任务"""
+    def should_trigger(self, current_dt):
+        # 生成当日理论执行时间
+        should1 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
+        should2 = current_dt - timedelta(minutes=1) >= self.last_executed        
+        should = should1 and should2
+        # 当前时间已过执行时间 且 超过1分钟
+        return should
+
+# ===================== 以下为工具函数 ************************ 
+class DailyTask(ScheduledTask):
+    """每日任务"""
+    def should_trigger(self, current_dt):
+        # 生成当日理论执行时间
+        should1 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
+        should2 = self.last_executed != current_dt.date()
+        should = should1 and should2
+        # 当前时间已过执行时间 且 当日未执行
+        return should
+
+class WeeklyTask(ScheduledTask):
+    """每周任务"""
+    def __init__(self, weekday, execution_time):
+        super().__init__(execution_time)
+        self.weekday = weekday  # 0-6 (周一至周日)
+    
+    def should_trigger(self, current_dt):
+        should1 = int(current_dt.weekday()) == self.weekday
+        should2 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
+        week_num = current_dt.isocalendar()[1]        
+        should3 = self.last_executed != f"{current_dt.year}-{week_num}"
+        should = should1 and should2 and should3
+        # if should:
+        #     print('每周调仓时间到', current_dt)
+        # 周几匹配 且 时间已过 且 当周未执行
+        return should
+
+class TaskRunner:
+    def __init__(self, context):
+        self.daily_tasks = []
+        self.weekly_tasks = []
+        self.context = context
+
+    def run_daily(self, time_str, task_func):
+        """注册每日任务
+        Args:
+            time_str: 触发时间 "HH:MM"
+            task_func: 任务函数
+        """
+        self.daily_tasks.append( (DailyTask(time_str), task_func) )
+    
+    def run_weekly(self, weekday, time_str, task_func):
+        """注册每周任务
+        Args:
+            weekday: 0-6 代表周一到周日
+            time_str: 触发时间 "HH:MM"
+            task_func: 任务函数
+        """
+        self.weekly_tasks.append( (WeeklyTask(weekday, time_str), task_func) )
+    
+    def check_tasks(self, bar_time):
+        """在handlebar中调用检查任务
+        Args:
+            bar_time: K线结束时间(datetime对象)
+        """
+        # 处理每日任务
+        for task, func in self.daily_tasks:
+            if task.should_trigger(bar_time):
+                func(self.context)
+                task.last_executed = bar_time.date()
+        
+        # 处理每周任务
+        for task, func in self.weekly_tasks:
+            if task.should_trigger(bar_time):
+                func(self.context)
+                week_num = bar_time.isocalendar()[1]
+                task.last_executed = f"{bar_time.year}-{week_num}"  # (year, week)
 
