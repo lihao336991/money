@@ -3,6 +3,12 @@ import pandas as pd
 import numpy as np
 import datetime
 import time
+import uuid
+
+# 全局状态存储器
+class G():pass
+g = G()
+g.stock_num = 4
 
 def init(ContextInfo):
     account = '620000369618'
@@ -12,12 +18,15 @@ def init(ContextInfo):
     # 定时任务设定
     if ContextInfo.do_back_test:
         ContextInfo.runner.run_daily("9:20", prepare)
-
+        ContextInfo.runner.run_daily("9:30", buy)
         ContextInfo.runner.run_daily("13:00", sell)
         
     else:
         ContextInfo.run_time("prepare","1nDay","2025-08-01 09:20:00","SH")
+        ContextInfo.run_time("buy","1nDay","2025-08-01 09:30:03","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 13:00:00","SH")
+        ContextInfo.run_time("sell","1nDay","2025-08-01 14:55:00","SH")
+        ContextInfo.run_time("sell","1nDay","2025-08-01 14:30:00","SH")
 
 def bar_time(ContextInfo):    
     index = ContextInfo.barpos
@@ -75,6 +84,7 @@ def prepare(ContextInfo):
     
     # 换手率-倒序排一下，优先换手率高的
     resultStockList = []
+    g.today_list = []
     if rzqStockList:
         # 获取当前日期作为换手率筛选的基准日
         index = ContextInfo.barpos if hasattr(ContextInfo, 'barpos') else 0
@@ -85,10 +95,12 @@ def prepare(ContextInfo):
             
             # 调用换手率筛选函数
             resultStockList = get_turnover_stocks(ContextInfo, rzqStockList, target_date)
-            
+            g.today_list = resultStockList
             # 输出最终筛选结果
             print(f"【最终结果】经过所有筛选后剩余 {len(resultStockList)} 只股票")
-            print(f"【最终结果】{resultStockList}")
+            # 将股票代码转换为股票名称后显示
+            stock_names = [ContextInfo.get_stock_name(stock) for stock in resultStockList]
+            print(f"【最终结果】{stock_names}")
         else:
             print("【换手率筛选】无法获取当前日期，跳过筛选")
     else:
@@ -657,6 +669,54 @@ def codeOfPosition(ContextInfo, position):
 def get_limit_of_stock(ContextInfo, last_close):
     return [round(last_close * 1.05, 2), round(last_close * 0.95), 2]
 
+# 买入函数
+def buy(ContextInfo):
+    positions = get_trade_detail_data(ContextInfo.account, 'STOCK', 'POSITION')
+    hold_list = [codeOfPosition(position) for position in positions if position.m_dMarketValue > 1000]
+    target=g.today_list
+    if len(target)==0:
+        return
+    ticksOfDay = ContextInfo.get_market_data_ex(
+        ['close'],                
+        list,
+        period="1d",
+        start_time = (ContextInfo.today - timedelta(days=1)).strftime('%Y%m%d'),
+        end_time = ContextInfo.today.strftime('%Y%m%d'),
+        count=1,
+        dividend_type = "follow",
+        fill_data = True,
+        subscribe = ~ContextInfo.do_back_test
+    )
+    ticksData = ContextInfo.get_market_data_ex(
+        ['lastPrice', 'open'],
+        list,
+        period="tick",
+        count=1,
+        dividend_type = "follow",
+        fill_data = True,
+        subscribe = ~ContextInfo.do_back_test
+    )
+    ticksData = ticksData[(ticksData['lastPrice']/ticksOfDay['close'])< 1.015] 
+    ticksData = ticksData[(ticksData['lastPrice']/ticksOfDay['close'])>0.951]
+    target = list(ticksData.index)
+    print('当日开盘筛选后股票池:', target)
+    if len(target)==0:
+        return
+    num = g.stock_num - len(hold_list)
+    target=[x for x in target  if x not in  hold_list][:num]
+    if len(target) > 0:
+        value = round(1 / len(target), 2) - 0.001
+        money = get_account_money(ContextInfo)
+        print("买入目标：", target,  [ContextInfo.get_stock_name(stock) for stock in target], "单支买入：", value, "金额：", money)
+        # 单支股票需要的买入金额
+        single_mount = round(money * value, 2)
+        for stock in target:
+            if ContextInfo.do_back_test:
+                open_position_in_test(ContextInfo, stock, round(1 / len(g.stock_num), 2) - 0.001)
+            else:
+                open_position(ContextInfo, stock, single_mount)
+
+# 卖出函数
 def sell(ContextInfo):
     positions = get_trade_detail_data(ContextInfo.account, 'STOCK', 'POSITION')
     hold_list = [codeOfPosition(position) for position in positions if position.m_dMarketValue > 1000]
@@ -711,18 +771,13 @@ def sell(ContextInfo):
             
             # 需要卖出
             if sell_condition:
-                print('需要卖出:', stock)
+                print('需要卖出:', stock, ContextInfo.get_stock_name(stock))
                 if ContextInfo.do_back_test:
                     order_target_value(stock, 0, ContextInfo, ContextInfo.account)
                 else:
                     # 1123 表示可用股票数量下单，这里表示全卖
                     # 这里实盘已经验证传参正确，因为1123模式下表示可用比例，所以传1表示全卖
                     passorder(24, 1123, ContextInfo.account, stock, 6, 1, 1, "卖出策略", 1, "", ContextInfo)
-                    
-                    
-                    
-                    
-                    
 
 class ScheduledTask:
     """定时任务基类"""
@@ -816,3 +871,36 @@ class TaskRunner:
                 week_num = bar_time.isocalendar()[1]
                 task.last_executed = f"{bar_time.year}-{week_num}"  # (year, week)
 
+
+# 获取当前账户可用金额
+def get_account_money(ContextInfo):        
+    accounts = get_trade_detail_data(ContextInfo.account, 'stock', 'account')
+    money = 0
+    for dt in accounts:
+        money = dt.m_dAvailable
+    return money
+
+
+# 回测和实盘不一样，回测用目标比例，实盘用可用资金比例。注意这个value传参
+def open_position_in_test(context, security: str, value: float):
+    print("买入股票(回测):", security, context.get_stock_name(security), str(int(value * 100)) + '%')
+    order_target_percent(security, round(value, 2), 'COMPETE', context, context.account)
+
+
+# 实盘的买入非常复杂，需要考虑部分成交的情况，以及长时间委托不成交的情况，这里单开一个函数进行，且进行定时循环调用
+# 这里有问题，不能和open_position在同一作用域。QMT貌似不支持多线程工作，因此需要整体循环买入后，整体定时检测再撤单。
+def open_position(context, security: str, value: float = 0) -> bool:
+    """
+    开仓操作：尝试买入指定股票，支持指定股票数量或者金额
+
+    参数:
+        security: 股票代码
+        value: 分配给该股票的资金
+    """
+    print("买入股票(实盘):", security, context.get_stock_name(security), value )
+    
+    # 走到这里则为首次下单，直接以目标金额数买入
+    # 1102 表示总资金量下单
+    lastOrderId = str(uuid.uuid4())
+    g.orderIdMap[security] = lastOrderId
+    passorder(23, 1102, context.account, security, 5, -1, value, lastOrderId, 1, lastOrderId, context)
