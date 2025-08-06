@@ -492,7 +492,7 @@ def rzq_list_new(ContextInfo, initial_list):
     )
     target = []
     for stock in initial_list:
-        print('单个股票的day data', ticksOfDay[stock])
+        print(stock, '单个股票的day data', ticksOfDay[stock])
         # 昨日收盘价
         lastClose = ticksOfDay[stock]["close"].iloc[-2]
         # 前日收盘价
