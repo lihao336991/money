@@ -795,11 +795,13 @@ def buy(ContextInfo):
     num = g.stock_num - len(hold_list)
     target=[x for x in target  if x not in  hold_list][:num]
     if len(target) > 0:
-        value = round(1 / len(target), 2) - 0.001
+        # 剩余份数
+        leftNum = g.stock_num - len(hold_list)
+        buyPercent = round(1 / leftNum, 2) - 0.001
         money = get_account_money(ContextInfo)
-        print("买入目标：", target,  [ContextInfo.get_stock_name(stock) for stock in target], "单支买入：", value, "金额：", money)
         # 单支股票需要的买入金额
-        single_mount = round(money * value, 2)
+        single_mount = round(money * buyPercent, 2)
+        print("买入目标：", target,  [ContextInfo.get_stock_name(stock) for stock in target], "单支买入剩余比例：", buyPercent, "金额：", single_mount)
         for stock in target:
             if ContextInfo.do_back_test:
                 open_position_in_test(ContextInfo, stock, round(1 / g.stock_num, 2) - 0.001)
