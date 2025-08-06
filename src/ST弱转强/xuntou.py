@@ -64,7 +64,7 @@ def prepare(ContextInfo):
             name = ContextInfo.get_stock_name(code)
             stock_info[code] = name
             # 筛选名字中包含ST或st的股票（仅存代码）
-            if 'ST' in name or 'st' in name:
+            if 'ST' in name.upper() and not any(p in code for p in ['300', '688', '301']):
                 stStockList.append(code) 
         except Exception as e:
             print(f"获取股票 {code} 名称失败：{e}")
@@ -72,7 +72,10 @@ def prepare(ContextInfo):
     # 国九条筛选
     GJTFliterStockList = []
     for stock_code in stStockList:
-        if GJT_filter_stocks(ContextInfo, stock_code):
+        if today_is_between(ContextInfo):
+            if GJT_filter_stocks(ContextInfo, stock_code):
+                GJTFliterStockList.append(stock_code)
+        else:
             GJTFliterStockList.append(stock_code)
     
     # 技术指标筛选-# 多头排列，未曾跌停，10日线上方，放量，成交量未暴增，股价>1
@@ -785,7 +788,6 @@ def buy(ContextInfo):
     if len(common_stocks) == 0:
         print("无共同标的股票")
         return
-    
 
     print('当日开盘筛选后股票池:', target)
     if len(target)==0:
@@ -1011,3 +1013,23 @@ def find_stock_of_positions(positions, stock):
         print('有持仓', stock, result[0])
 
         return result[0]
+
+
+def today_is_between(self, ContextInfo: Any) -> bool:
+    """
+    判断当前日期是否为资金再平衡（空仓）日，通常在04月或01月期间执行空仓操作
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+
+    返回:
+        若为空仓日返回 True，否则返回 False
+    """
+    today_str = datetime.fromtimestamp(ContextInfo.currentTime / 1000).strftime('%m-%d')
+    if self.pass_april:
+        if ('04-01' <= today_str <= '04-30') or ('01-01' <= today_str <= '01-30'):
+            return True
+        else:
+            return False
+    else:
+        return False
