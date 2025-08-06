@@ -24,6 +24,8 @@ def init(ContextInfo):
         ContextInfo.runner.run_daily("9:30", prepare)
         ContextInfo.runner.run_daily("9:31", buy)
         ContextInfo.runner.run_daily("13:00", sell)
+        ContextInfo.runner.run_daily("14:00", sell)
+        ContextInfo.runner.run_daily("14:55", sell)
         
     else:
         ContextInfo.run_time("prepare","1nDay","2025-08-01 09:20:00","SH")
@@ -38,6 +40,11 @@ def handlebar(ContextInfo):
     currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
     ContextInfo.currentTime = currentTime
     ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
+
+    current_dt = datetime.datetime.fromtimestamp(currentTime / 1000)
+    yesterday_dt = get_previous_trading_day(ContextInfo, current_dt.date())
+    yesterday = yesterday_dt.strftime("%Y%m%d")
+    ContextInfo.yesterday = yesterday
 
     if (datetime.datetime.now() - datetime.timedelta(days=1) > ContextInfo.today) and not ContextInfo.do_back_test:
         # print('非回测模式，历史不处理')
@@ -64,7 +71,7 @@ def prepare(ContextInfo):
             name = ContextInfo.get_stock_name(code)
             stock_info[code] = name
             # 筛选名字中包含ST或st的股票（仅存代码）
-            if 'ST' in name.upper() and not any(p in code for p in ['300', '688', '301']):
+            if 'ST' in name.upper() and not code.startswith(tuple(['3', '688', '8', '4'])):
                 stStockList.append(code) 
         except Exception as e:
             print(f"获取股票 {code} 名称失败：{e}")
@@ -72,11 +79,12 @@ def prepare(ContextInfo):
     # 国九条筛选
     GJTFliterStockList = []
     for stock_code in stStockList:
-        if today_is_between(ContextInfo):
-            if GJT_filter_stocks(ContextInfo, stock_code):
-                GJTFliterStockList.append(stock_code)
-        else:
-            GJTFliterStockList.append(stock_code)
+        # if today_is_between(ContextInfo):
+        #     if GJT_filter_stocks(ContextInfo, stock_code):
+        #         GJTFliterStockList.append(stock_code)
+        # else:
+        #     GJTFliterStockList.append(stock_code)
+        GJTFliterStockList.append(stock_code)
     
     # 技术指标筛选-# 多头排列，未曾跌停，10日线上方，放量，成交量未暴增，股价>1
     fStockList = []
@@ -91,8 +99,8 @@ def prepare(ContextInfo):
 
         rzqStockList = rzq_list_new(ContextInfo, fStockList)
         # rzqStockList = rzq_list(ContextInfo, fStockList)
-        for code in rzqStockList:
-            print(f"股票代码：{code}，通过RZQ验证")
+        # for code in rzqStockList:
+        #     print(f"股票代码：{code}，通过RZQ验证")
     else:
         print("\nRZQ筛选前无股票，跳过RZQ筛选")
     
@@ -103,12 +111,11 @@ def prepare(ContextInfo):
         # 获取当前日期作为换手率筛选的基准日
         index = ContextInfo.barpos if hasattr(ContextInfo, 'barpos') else 0
         bar_timetag = ContextInfo.get_bar_timetag(index)
+
+        
         if bar_timetag:
-            current_dt = datetime.datetime.fromtimestamp(bar_timetag / 1000)
-            target_date = current_dt.strftime("%Y%m%d")
-            
             # 调用换手率筛选函数
-            resultStockList = get_turnover_stocks(ContextInfo, rzqStockList, target_date)
+            resultStockList = get_turnover_stocks(ContextInfo, rzqStockList, ContextInfo.yesterday)
             g.today_list = resultStockList
             # 输出最终筛选结果
             print(f"【最终结果】经过所有筛选后剩余 {len(resultStockList)} 只股票")
@@ -142,10 +149,11 @@ def GJT_filter_stocks(ContextInfo, stockCode):
             return False
         
         # 时间转换（毫秒→datetime→字符串）
-        current_dt = datetime.datetime.fromtimestamp(bar_timetag / 1000)
+        current_dt = datetime.datetime.fromtimestamp(ContextInfo.currentTime / 1000)
         start_dt = current_dt - datetime.timedelta(days=365)
         startDate = start_dt.strftime("%Y%m%d")
         endDate = current_dt.strftime("%Y%m%d")
+        
         
         # 财务字段列表（带表名前缀，匹配接口要求）
         fieldList = [
@@ -266,13 +274,7 @@ def filter_stocks(ContextInfo, stocks):
         return []
     
     try:
-        index = ContextInfo.barpos if hasattr(ContextInfo, 'barpos') else 0
-        bar_timetag = ContextInfo.get_bar_timetag(index)
-        if bar_timetag is None:
-            print("【技术指标筛选】无法获取K线时间戳")
-            return []
-        
-        current_dt = datetime.datetime.fromtimestamp(bar_timetag / 1000)
+        current_dt = datetime.datetime.fromtimestamp(ContextInfo.currentTime / 1000)
         yesterday_dt = get_previous_trading_day(ContextInfo, current_dt.date())
         yesterday = yesterday_dt.strftime("%Y%m%d")
         
@@ -495,7 +497,8 @@ def rzq_list_new(ContextInfo, initial_list):
     )
     target = []
     for stock in initial_list:
-        print(stock, '单个股票的day data', ticksOfDay[stock])
+        # 怀疑没数据的时候打开看看
+        # print(stock, '单个股票的day data', ticksOfDay[stock])
         # 昨日收盘价
         lastClose = ticksOfDay[stock]["close"].iloc[-2]
         # 前日收盘价
@@ -512,166 +515,27 @@ def rzq_list_new(ContextInfo, initial_list):
         if last2dIsHL and not last1dIsHL:
             target.append(stock)
 
-        print('前日收盘价', last2dClose)
-        print('昨日收盘价', lastClose)
-        print('大前日收盘价', last3dClose)
-        print('前天涨停价', last2dHighLimit)
-        print('昨天涨停价', last1dHighLimit)
-        print('昨日是否涨停', last1dIsHL)
-        print('前日是否涨停', last2dIsHL)
+        # print('前日收盘价', last2dClose)
+        # print('昨日收盘价', lastClose)
+        # print('大前日收盘价', last3dClose)
+        # print('前天涨停价', last2dHighLimit)
+        # print('昨天涨停价', last1dHighLimit)
+        # print('昨日是否涨停', last1dIsHL)
+        # print('前日是否涨停', last2dIsHL)
     return target
 
-
-
-def rzq_list(ContextInfo, initial_list):
-    """筛选昨日不涨停但前日涨停的股票"""
-    try:
-        # 获取当前K线时间戳并转换为日期
-        index = ContextInfo.barpos if hasattr(ContextInfo, 'barpos') else 0
-        bar_timetag = ContextInfo.get_bar_timetag(index)
-        if bar_timetag is None:
-            print("【rzq_list】无法获取K线时间戳，返回空列表")
-            return []
-        
-        current_dt = datetime.datetime.fromtimestamp(bar_timetag / 1000)
-        yesterday_str = current_dt.strftime("%Y%m%d")
-        
-        # 计算前日和大前日（交易日）
-        date_1 = get_shifted_date(ContextInfo, yesterday_str, -1, 'T')  # 前日
-        date_2 = get_shifted_date(ContextInfo, yesterday_str, -2, 'T')  # 大前日
-        
-        # 筛选昨日不涨停的股票
-        h1_list = get_ever_hl_stock(ContextInfo, initial_list, yesterday_str)
-        
-        # 筛选前日涨停的股票
-        hl_stocks = get_hl_stock(ContextInfo, initial_list, date_1)
-        
-        # 取交集：昨日不涨停且前日涨停
-        result_list = [stock for stock in h1_list if stock in hl_stocks]
-        
-        return result_list
-        
-    except Exception as e:
-        print(f"【rzq_list】错误: {str(e)}")
-        return []
-
-
-def get_ever_hl_stock(ContextInfo, stock_list, date):
-    """筛选在指定日期不涨停的股票"""
-    try:
-        if not stock_list:
-            print("【get_ever_hl_stock】股票列表为空")
-            return []
-        
-        # 获取指定日期及前一交易日的行情数据
-        prev_trading_day = get_shifted_date(ContextInfo, date, -1, 'T')
-        
-        market_data = ContextInfo.get_market_data_ex(
-            fields=['close', 'code', 'time'],
-            stock_code=stock_list,
-            period='1d',
-            start_time=prev_trading_day,
-            end_time=date,
-            count=2,
-            fill_data=False,
-            subscribe=False
-        )
-
-        # 筛选不涨停的股票
-        result = []
-        for code, df in market_data.items():
-            if df.empty or len(df) < 2:
-                print(f"【get_ever_hl_stock】{code} 缺少足够数据，跳过")
-                continue
-                
-            try:
-                # 排序确保日期正确
-                df = df.sort_values('time')
-                
-                # 前一交易日收盘价
-                prev_close = df['close'].iloc[0]
-                # 指定日期收盘价
-                current_close = df['close'].iloc[1]
-                
-                # 计算涨停价（前一交易日收盘价 * 1.05）
-                high_limit = prev_close * 1.05
-                
-                # 考虑浮点精度问题
-                if not np.isclose(current_close, high_limit, atol=0.01):
-                    result.append(code)
-            except Exception as e:
-                print(f"【get_ever_hl_stock】处理 {code} 时出错: {e}")
-        
-        return result
-        
-    except Exception as e:
-        print(f"【get_ever_hl_stock】错误: {str(e)}")
-        return []
-
-
-def get_hl_stock(ContextInfo, stock_list, date):
-    """筛选在指定日期涨停的股票"""
-    try:
-        if not stock_list:
-            print("【get_hl_stock】股票列表为空")
-            return []
-        
-        # 获取指定日期及前一交易日的行情数据
-        prev_trading_day = get_shifted_date(ContextInfo, date, -1, 'T')
-        
-        market_data = ContextInfo.get_market_data_ex(
-            fields=['close', 'code', 'time'],
-            stock_code=stock_list,
-            period='1d',
-            start_time=prev_trading_day,
-            end_time=date,
-            count=2,
-            fill_data=False,
-            subscribe=False
-        )
-
-        # 筛选涨停的股票
-        result = []
-        for code, df in market_data.items():
-            if df.empty or len(df) < 2:
-                print(f"【get_hl_stock】{code} 缺少足够数据，跳过")
-                continue
-                
-            try:
-                # 排序确保日期正确
-                df = df.sort_values('time')
-                
-                # 前一交易日收盘价
-                prev_close = df['close'].iloc[0]
-                # 指定日期收盘价
-                current_close = df['close'].iloc[1]
-                
-                # 计算涨停价（前一交易日收盘价 * 1.05）
-                high_limit = prev_close * 1.05
-                
-                # 考虑浮点精度问题
-                if np.isclose(current_close, high_limit, atol=0.01):
-                    result.append(code)
-            except Exception as e:
-                print(f"【get_hl_stock】处理 {code} 时出错: {e}")
-        
-        return result
-        
-    except Exception as e:
-        print(f"【get_hl_stock】错误: {str(e)}")
-        return []
-    
 
 def get_turnover_stocks(ContextInfo, stk_list, date):
     """获取指定日期的换手率数据并按换手率降序排列"""
     try:
+        print('换手率筛选开始', date)
         if not stk_list:
             print("【换手率筛选】股票列表为空，返回空结果")
             return []
         
         # 获取指定日期的换手率数据
         turnover_data = ContextInfo.get_market_data_ex(
-            fields=['code', 'time', 'turnover_ratio'],  # 换手率字段
+            fields=['code', 'time'],  # 换手率字段
             stock_code=stk_list,
             period='1d',
             start_time=date,
@@ -680,6 +544,9 @@ def get_turnover_stocks(ContextInfo, stk_list, date):
             fill_data=False,
             subscribe=False
         )
+        
+        turnover_data2 = ContextInfo.get_turnover_rate(stk_list, date, date)
+        print(date, '昨日换手率数据', turnover_data2)
         
         # 处理返回的数据
         dfs = []
@@ -694,9 +561,12 @@ def get_turnover_stocks(ContextInfo, stk_list, date):
                 df['time'] = pd.to_datetime(df['time'], unit='ms', errors='coerce')
             else:
                 df['time'] = pd.to_datetime(df['time'], errors='coerce')
-            
+            df['turnover_ratio'] = turnover_data2[code].iloc[-1]
+
             df.loc[:, 'code'] = code
-            dfs.append(df)
+            # 加个换手率条件，换手太小不玩
+            if turnover_data2[code].iloc[-1] >0.05:
+                dfs.append(df)
         
         if not dfs:
             print("【换手率筛选】所有股票均无有效换手率数据")
@@ -736,36 +606,25 @@ def buy(ContextInfo):
         [],                
         today_list,
         period="1d",
-        start_time = (ContextInfo.today - datetime.timedelta(days=1)).strftime('%Y%m%d'),
+        start_time = (ContextInfo.today - datetime.timedelta(days=14)).strftime('%Y%m%d'),
         end_time = ContextInfo.today.strftime('%Y%m%d'),
-        count=1,
+        count=2,
         dividend_type = "follow",
         fill_data = True,
         subscribe = False
     )
-    ticksData = ContextInfo.get_market_data_ex(
-        [],
-        today_list,
-        period="1m",
-        start_time = (ContextInfo.today - datetime.timedelta(days=1)).strftime('%Y%m%d%H%M%S'),
-        end_time = ContextInfo.today.strftime('%Y%m%d%H%M%S'),
-        count=1,
-        dividend_type = "follow",
-        fill_data = True,
-        subscribe = True
-    )
-    
     target = []
+
     # 遍历股票代码进行双数据源校验
     for stock in today_list:
         try:
             # 获取tick数据和日线数据
-            tick_price = ticksData[stock]["close"].iloc[0]
-            day_close = ticksOfDay[stock]["close"].iloc[0]
-            
+            tick_price = ticksOfDay[stock]["open"].iloc[-1]
+            day_close = ticksOfDay[stock]["close"].iloc[-2]
+            # print(ContextInfo.get_stock_name(stock), ticksOfDay[stock])
             # 计算价格波动比例
             price_ratio = tick_price / day_close
-            print('看看波动', stock, tick_price, day_close, price_ratio)
+            # print('看看波动', ContextInfo.get_stock_name(stock), stock,  tick_price, day_close, price_ratio)
 
             # 执行筛选条件
             if 0.951 < price_ratio < 1.015:
@@ -778,15 +637,8 @@ def buy(ContextInfo):
 
     # 数据校验（处理空数据情况）
     # 修正字典类型判空方式
-    if not ticksData or not ticksOfDay:
+    if not ticksOfDay:
         print("行情数据为空，终止处理")
-        return
-    
-    # 获取交集索引
-    # 字典结构处理交集
-    common_stocks = list(set(ticksData.keys()) & set(ticksOfDay.keys()))
-    if len(common_stocks) == 0:
-        print("无共同标的股票")
         return
 
     print('当日开盘筛选后股票池:', target)
@@ -801,10 +653,10 @@ def buy(ContextInfo):
         money = get_account_money(ContextInfo)
         # 单支股票需要的买入金额
         single_mount = round(money * buyPercent, 2)
-        print("买入目标：", target,  [ContextInfo.get_stock_name(stock) for stock in target], "单支买入剩余比例：", buyPercent, "金额：", single_mount)
+        print(ContextInfo.today, "买入目标：", target,  [ContextInfo.get_stock_name(stock) for stock in target], "单支买入剩余比例：", buyPercent, "金额：", single_mount)
         for stock in target:
             if ContextInfo.do_back_test:
-                open_position_in_test(ContextInfo, stock, round(1 / g.stock_num, 2) - 0.001)
+                open_position_in_test(ContextInfo, stock, round(1 / g.stock_num, 2) - 0.01)
             else:
                 open_position(ContextInfo, stock, single_mount)
 
@@ -837,17 +689,17 @@ def sell(ContextInfo):
             subscribe = False
         )
         for stock in hold_list:
-            print('单个股票的tick data', ticksData[stock])
-            print('单个股票的day data', ticksOfDay[stock])
+            # print('单个股票的tick data', ticksData[stock])
+            # print('单个股票的day data', ticksOfDay[stock])
             # 最新价
             lastPrice = ticksData[stock]["close"].iloc[0]
             # 前日收盘价
             last2dClose = ticksOfDay[stock]["close"].iloc[-3]
             # 昨日收盘价
             lastClose = ticksOfDay[stock]["close"].iloc[-2]
-            print('最新价', lastPrice)
-            print('前日收盘价', last2dClose)
-            print('昨日收盘价', lastClose)
+            # print('最新价', lastPrice)
+            # print('前日收盘价', last2dClose)
+            # print('昨日收盘价', lastClose)
 
 
             # 昨涨停价
@@ -986,8 +838,12 @@ def get_account_money(ContextInfo):
 
 # 回测和实盘不一样，回测用目标比例，实盘用可用资金比例。注意这个value传参
 def open_position_in_test(context, security: str, value: float):
-    print("买入股票(回测):", security, context.get_stock_name(security), str(int(value * 100)) + '%')
-    order_target_percent(security, round(value, 2), 'COMPETE', context, context.account)
+    # print("买入股票(回测):", security, context.get_stock_name(security), str(int(value * 100)) + '%')
+    try:
+        order_target_percent(security, round(value, 2), 'COMPETE', context, context.account)
+    except Exception as e:
+        order_target_percent(security, round(value, 2) - 0.03, 'COMPETE', context, context.account)
+
 
 
 # 实盘的买入非常复杂，需要考虑部分成交的情况，以及长时间委托不成交的情况，这里单开一个函数进行，且进行定时循环调用
@@ -1017,7 +873,7 @@ def find_stock_of_positions(positions, stock):
         return result[0]
 
 
-def today_is_between(self, ContextInfo: Any) -> bool:
+def today_is_between(ContextInfo) -> bool:
     """
     判断当前日期是否为资金再平衡（空仓）日，通常在04月或01月期间执行空仓操作
 
@@ -1027,11 +883,8 @@ def today_is_between(self, ContextInfo: Any) -> bool:
     返回:
         若为空仓日返回 True，否则返回 False
     """
-    today_str = datetime.fromtimestamp(ContextInfo.currentTime / 1000).strftime('%m-%d')
-    if self.pass_april:
-        if ('04-01' <= today_str <= '04-30') or ('01-01' <= today_str <= '01-30'):
-            return True
-        else:
-            return False
+    today_str = datetime.datetime.fromtimestamp(ContextInfo.currentTime / 1000).strftime('%m-%d')
+    if ('04-01' <= today_str <= '04-30') or ('01-01' <= today_str <= '01-30'):
+        return True
     else:
         return False
