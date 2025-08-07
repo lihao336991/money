@@ -4,20 +4,32 @@ import numpy as np
 import datetime
 import time
 import uuid
+import requests
+import json
 
 # 全局状态存储器
 class G():pass
 g = G()
 g.stock_num = 4
 
+# 配置列表（注意不要删除，注释掉改为自己的就好）
+# 学鸿的账户
+# ACCOUNT = '620000369618'
+# 李浩的账户
+ACCOUNT = '620000204906'
+
+# 李浩的bot
+HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=9432be67-03e1-400f-ad24-6feb1935fafc'
+
+
 
 def init(ContextInfo):
     # account = '620000369618'
     # 李浩 股票账户
-    ContextInfo.account = '620000204906'
+    ContextInfo.account = ACCOUNT
     ContextInfo.set_account(ContextInfo.account)
     ContextInfo.runner = TaskRunner(ContextInfo)
-    
+    messager.set_is_test(ContextInfo.do_back_test)
     # 定时任务设定
     if ContextInfo.do_back_test:
         print('doing test')
@@ -29,7 +41,8 @@ def init(ContextInfo):
         
     else:
         ContextInfo.run_time("prepare","1nDay","2025-08-01 09:20:00","SH")
-        ContextInfo.run_time("buy","1nDay","2025-08-01 09:30:03","SH")
+        # 集合竞价后就尝试下单，最新价是否就是集合竞价收盘价？
+        ContextInfo.run_time("buy","1nDay","2025-08-01 09:29:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 13:00:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:55:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:30:00","SH")
@@ -564,9 +577,7 @@ def get_turnover_stocks(ContextInfo, stk_list, date):
             df['turnover_ratio'] = turnover_data2[code].iloc[-1]
 
             df.loc[:, 'code'] = code
-            # 加个换手率条件，换手太小不玩
-            if turnover_data2[code].iloc[-1] >0.05:
-                dfs.append(df)
+            dfs.append(df)
         
         if not dfs:
             print("【换手率筛选】所有股票均无有效换手率数据")
@@ -614,6 +625,12 @@ def buy(ContextInfo):
         subscribe = False
     )
     target = []
+    
+    # 数据校验（处理空数据情况）
+    # 修正字典类型判空方式
+    if not ticksOfDay:
+        print("行情数据为空，终止处理")
+        return
 
     # 遍历股票代码进行双数据源校验
     for stock in today_list:
@@ -621,12 +638,12 @@ def buy(ContextInfo):
             # 获取tick数据和日线数据
             tick_price = ticksOfDay[stock]["open"].iloc[-1]
             day_close = ticksOfDay[stock]["close"].iloc[-2]
-            # print(ContextInfo.get_stock_name(stock), ticksOfDay[stock])
+            print('开盘时竞价数据查看', ContextInfo.get_stock_name(stock), ticksOfDay[stock])
             # 计算价格波动比例
-            price_ratio = tick_price / day_close
-            # print('看看波动', ContextInfo.get_stock_name(stock), stock,  tick_price, day_close, price_ratio)
+            price_ratio = round(tick_price / day_close, 4)
+            print('竞价表现', ContextInfo.get_stock_name(stock), stock,  '开盘价：', tick_price, '昨日收盘价：', day_close, price_ratio)
 
-            # 执行筛选条件
+            # 执行筛选条件 高开1.5点以内, 低开5个点以内
             if 0.951 < price_ratio < 1.015:
                 target.append(stock)
                 
@@ -635,13 +652,8 @@ def buy(ContextInfo):
         except Exception as e:
             print(f"处理{stock}时发生错误: {str(e)}")
 
-    # 数据校验（处理空数据情况）
-    # 修正字典类型判空方式
-    if not ticksOfDay:
-        print("行情数据为空，终止处理")
-        return
-
     print('当日开盘筛选后股票池:', target)
+    
     if len(target)==0:
         return
     num = g.stock_num - len(hold_list)
@@ -654,6 +666,7 @@ def buy(ContextInfo):
         # 单支股票需要的买入金额
         single_mount = round(money * buyPercent, 2)
         print(ContextInfo.today, "买入目标：", target,  [ContextInfo.get_stock_name(stock) for stock in target], "单支买入剩余比例：", buyPercent, "金额：", single_mount)
+        messager.send_message(f"买入目标：{[ContextInfo.get_stock_name(stock) for stock in target]}, 单支买入金额：{single_mount}")
         for stock in target:
             if ContextInfo.do_back_test:
                 open_position_in_test(ContextInfo, stock, round(1 / g.stock_num, 2) - 0.01)
@@ -709,7 +722,7 @@ def sell(ContextInfo):
             # 盈亏比例
             position = find_stock_of_positions(positions, stock)
             profit = position.m_dProfitRate
-            print('持仓信息', stock, profit)
+            # print('持仓信息', stock, profit)
 
             # 条件1：今天未涨停
             cond1 = lastPrice < high_limit
@@ -727,12 +740,13 @@ def sell(ContextInfo):
             # 需要卖出
             if sell_condition:
                 print('需要卖出:', stock, ContextInfo.get_stock_name(stock))
+                messager.send_message(f"需要卖出：{ContextInfo.get_stock_name(stock)}")
                 if ContextInfo.do_back_test:
                     order_target_value(stock, 0, ContextInfo, ContextInfo.account)
                 else:
                     # 1123 表示可用股票数量下单，这里表示全卖
                     # 这里实盘已经验证传参正确，因为1123模式下表示可用比例，所以传1表示全卖
-                    passorder(24, 1123, ContextInfo.account, stock, 6, 1, 1, "卖出策略", 1, "", ContextInfo)
+                    passorder(24, 1123, ContextInfo.account, stock, 7, 1, 1, "卖出策略", 1, "", ContextInfo)
 
 class ScheduledTask:
     """定时任务基类"""
@@ -848,20 +862,11 @@ def open_position_in_test(context, security: str, value: float):
 
 # 实盘的买入非常复杂，需要考虑部分成交的情况，以及长时间委托不成交的情况，这里单开一个函数进行，且进行定时循环调用
 # 这里有问题，不能和open_position在同一作用域。QMT貌似不支持多线程工作，因此需要整体循环买入后，整体定时检测再撤单。
-def open_position(context, security: str, value: float = 0) -> bool:
-    """
-    开仓操作：尝试买入指定股票，支持指定股票数量或者金额
-
-    参数:
-        security: 股票代码
-        value: 分配给该股票的资金
-    """
-    print("买入股票(实盘):", security, context.get_stock_name(security), value )
-    
+def open_position(context, security: str, value: float = 0):
     # 走到这里则为首次下单，直接以目标金额数买入
     # 1102 表示总资金量下单
+    print("买入股票(实盘):", security, context.get_stock_name(security), value )
     lastOrderId = str(uuid.uuid4())
-    g.orderIdMap[security] = lastOrderId
     passorder(23, 1102, context.account, security, 5, -1, value, lastOrderId, 1, lastOrderId, context)
 
 
@@ -888,3 +893,29 @@ def today_is_between(ContextInfo) -> bool:
         return True
     else:
         return False
+    
+
+class Messager:
+    def __init__(self):
+        # 消息通知
+        self.webhook1 = HOOK
+        
+    def set_is_test(self, is_test):
+        self.is_test = is_test
+    def send_message(self, message):
+        if self.is_test:
+            return
+        # 设置企业微信机器人的Webhook地址
+        headers = {'Content-Type': 'application/json; charset=UTF-8'}
+        data = {
+            'msgtype': 'markdown', 
+            'markdown': {
+                'content': message
+            }
+        }
+        response = requests.post(HOOK, headers=headers, data=json.dumps(data))
+        if response.status_code == 200:
+            print('消息发送成功')
+        else:
+            print('消息发送失败')
+messager = Messager()
