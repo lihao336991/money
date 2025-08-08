@@ -214,8 +214,8 @@ class TradingStrategy:
     # 根据股票代码和收盘价，计算次日涨跌停价格
     def get_limit_of_stock(self, stock_code, last_close):
         if str(stock_code).startswith(tuple(['3', '688'])):
-            return [round(last_close * 1.2, 2), round(last_close * 0.8), 2]
-        return [round(last_close * 1.1, 2), round(last_close * 0.9), 2]
+            return [round(last_close * 1.2, 2), round(last_close * 0.8, 2)]
+        return [round(last_close * 1.1, 2), round(last_close * 0.9, 2)]
     # 根据股票代码，查询公司总市值
     def get_market_cup(self, context, code):
         data = context.get_instrumentdetail(code)
