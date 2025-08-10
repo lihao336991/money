@@ -16,8 +16,10 @@ g.stock_num = 4
 # 配置列表（注意不要删除，注释掉改为自己的就好）
 # 学鸿的账户
 # ACCOUNT = '620000369618'
-# 李浩的账户
-ACCOUNT = '620000204906'
+# 李腾的账户
+# ACCOUNT = '620000204906'
+# 李浩的实盘
+ACCOUNT = '190200026196'
 
 # 李浩的bot
 HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=9432be67-03e1-400f-ad24-6feb1935fafc'
@@ -42,12 +44,13 @@ def init(ContextInfo):
         ContextInfo.runner.run_daily("15:00", log_position)
         
     else:
-        ContextInfo.run_time("prepare","1nDay","2025-08-01 09:20:00","SH")
+        ContextInfo.run_time("prepare","1nDay","2025-08-01 09:25:01","SH")
         # 集合竞价后就尝试下单，最新价是否就是集合竞价收盘价？
-        ContextInfo.run_time("buy","1nDay","2025-08-01 09:29:00","SH")
+        ContextInfo.run_time("buy","1nDay","2025-08-01 09:26:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 13:00:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:55:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:30:00","SH")
+        ContextInfo.run_time("log_position", "2025-08-01 15:00:00","SH")
 
 def handlebar(ContextInfo):
     # 新增属性，快捷获取当前日期
@@ -569,7 +572,7 @@ def get_turnover_stocks(ContextInfo, stk_list, date):
             fields=['code', 'time'],  # 换手率字段
             stock_code=stk_list,
             period='1d',
-            start_time=date,
+            start_time="",
             end_time=date,
             count=1,  # 只获取1天数据
             fill_data=False,
