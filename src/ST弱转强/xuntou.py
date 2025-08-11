@@ -13,9 +13,10 @@ class G():pass
 g = G()
 g.stock_num = 4
 
+
 # 配置列表（注意不要删除，注释掉改为自己的就好）
 # 学鸿的账户
-# ACCOUNT = '620000369618'
+# ACCOUNT = '510600121302'
 # 李腾的账户
 # ACCOUNT = '620000204906'
 # 李浩的实盘
@@ -23,17 +24,13 @@ ACCOUNT = '190200026196'
 
 # 李浩的bot
 HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=9432be67-03e1-400f-ad24-6feb1935fafc'
-
-
-
 def init(ContextInfo):
-    # account = '620000369618'
+    # account = ''
     # 李浩 股票账户
     ContextInfo.account = ACCOUNT
     ContextInfo.set_account(ContextInfo.account)
     ContextInfo.runner = TaskRunner(ContextInfo)
     messager.set_is_test(ContextInfo.do_back_test)
-    getTime(ContextInfo)
     # 定时任务设定
     if ContextInfo.do_back_test:
         print('doing test')
@@ -45,21 +42,17 @@ def init(ContextInfo):
         ContextInfo.runner.run_daily("15:00", log_position)
         
     else:
-        ContextInfo.run_time("prepare","1nDay","2025-08-01 09:25:01","SH")
+        ContextInfo.run_time("prepare","1nDay","2025-08-01 09:20:00","SH")
         # 集合竞价后就尝试下单，最新价是否就是集合竞价收盘价？
         ContextInfo.run_time("buy","1nDay","2025-08-01 09:26:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 13:00:00","SH")
-        ContextInfo.run_time("sell","1nDay","2025-08-01 14:55:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:30:00","SH")
-        ContextInfo.run_time("log_position", "2025-08-01 15:00:00","SH")
+        ContextInfo.run_time("sell","1nDay","2025-08-01 14:55:00","SH")
 
-def getTime(ContextInfo):
-    if ContextInfo.do_back_test:
-        # 新增属性，快捷获取当前日期
-        index = ContextInfo.barpos
-        currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
-    else:
-        currentTime = time.time() * 1000
+def handlebar(ContextInfo):
+    # 新增属性，快捷获取当前日期
+    index = ContextInfo.barpos
+    currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
     ContextInfo.currentTime = currentTime
     ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
 
@@ -68,8 +61,6 @@ def getTime(ContextInfo):
     yesterday = yesterday_dt.strftime("%Y%m%d")
     ContextInfo.yesterday = yesterday
 
-def handlebar(ContextInfo):
-    getTime(ContextInfo)
     if (datetime.datetime.now() - datetime.timedelta(days=1) > ContextInfo.today) and not ContextInfo.do_back_test:
         # print('非回测模式，历史不处理')
         return
@@ -84,7 +75,6 @@ def prepare(ContextInfo):
     if not allStocks:
         print("未获取到沪深A股股票列表")
         return
-
         
     ContextInfo.set_universe(allStocks)
     
@@ -152,6 +142,7 @@ def prepare(ContextInfo):
             # 将股票代码转换为股票名称后显示
             stock_names = [ContextInfo.get_stock_name(stock) for stock in resultStockList]
             print(f"【最终结果】{stock_names}")
+            messager.send_message(f"当日开盘筛选后股票池：{stock_names}")
         else:
             print("【换手率筛选】无法获取当前日期，跳过筛选")
     else:
@@ -247,7 +238,7 @@ def get_relative_position_df(ContextInfo, stock_list, date, watch_days, ratio):
             end_time=date,
             count=watch_days,
             fill_data=False,
-            subscribe=False
+            subscribe=True
         )
         
         dfs = []
@@ -265,7 +256,6 @@ def get_relative_position_df(ContextInfo, stock_list, date, watch_days, ratio):
             if df['time'].isna().any():
                 print(f"【相对位置筛选】{code} 存在无效时间，已过滤")
                 df = df.dropna(subset=['time'])
-            
             df.loc[:, 'code'] = code
             dfs.append(df)
         if not dfs:
@@ -285,7 +275,6 @@ def get_relative_position_df(ContextInfo, stock_list, date, watch_days, ratio):
                 rp = 0.0
             else:
                 rp = (close - low) / (high - low)
-            
             result_list.append({'code': code, 'rp': rp})
         
         result_df = pd.DataFrame(result_list).set_index('code')
@@ -322,7 +311,7 @@ def filter_stocks(ContextInfo, stocks):
             end_time=yesterday,
             count=30,  # 改为获取30天数据
             fill_data=False,
-            subscribe=False
+            subscribe=True
         )
         
         dfs = []
@@ -422,7 +411,6 @@ def filter_stocks(ContextInfo, stocks):
             cond3 = latest['close'] > latest['ma10']
             cond4 = latest['volume'] < 10 * latest['prev_volume']  # 与原策略完全对齐：无特殊处理，严格判断
             cond5 = latest['close'] > 1
-            
             if all([cond1, cond2, cond3, cond4, cond5]):
                 valid_stocks.append(code)
         
@@ -524,7 +512,7 @@ def get_previous_trading_day(ContextInfo, current_date):
                 return current_date - datetime.timedelta(days=30)
 
 def rzq_list_new(ContextInfo, initial_list):
-    # print(f"【弱转强筛选】开始，初始标的数量：{len(initial_list)}")
+    
     ticksOfDay = ContextInfo.get_market_data_ex(
         [],                
         initial_list,
@@ -533,12 +521,13 @@ def rzq_list_new(ContextInfo, initial_list):
         end_time = ContextInfo.today.strftime('%Y%m%d'),
         count=4,
         dividend_type = "follow",
-        fill_data = True,
-        subscribe = False
+        fill_data = False,
+        subscribe = True
     )
     target = []
     for stock in initial_list:
         try:
+            print(f"code :{stock} ticksOfDay[stock]:{ticksOfDay[stock]}")
             # 昨日收盘价（倒数第2根K线）
             lastClose = ticksOfDay[stock]["close"].iloc[-2]
             # 前日收盘价（倒数第3根K线）
@@ -552,6 +541,8 @@ def rzq_list_new(ContextInfo, initial_list):
             # 判断是否前日涨停、昨日不涨停
             last1dIsHL = round(lastClose, 2) >= last1dHighLimit  # 昨日是否涨停
             last2dIsHL = round(last2dClose, 2) >= last2dHighLimit  # 前日是否涨停
+
+            print(f" code :{stock}, lastClose:{lastClose}, last2dClose :{last2dClose}, last3dClose :{last3dClose}, last1dHighLimit:{last1dHighLimit}, last2dHighLimit :{last2dHighLimit}")
             if last2dIsHL and not last1dIsHL:
                 target.append(stock)
             #     print(f"【弱转强通过】{stock}：前日涨停（{last2dClose}≥{last2dHighLimit}），昨日不涨停（{lastClose}<{last1dHighLimit}）")
@@ -578,11 +569,11 @@ def get_turnover_stocks(ContextInfo, stk_list, date):
             fields=['code', 'time'],  # 换手率字段
             stock_code=stk_list,
             period='1d',
-            start_time="",
+            start_time='',
             end_time=date,
             count=1,  # 只获取1天数据
             fill_data=False,
-            subscribe=False
+            subscribe=True
         )
         
         turnover_data2 = ContextInfo.get_turnover_rate(stk_list, date, date)
@@ -651,8 +642,8 @@ def buy(ContextInfo):
         end_time = ContextInfo.today.strftime('%Y%m%d'),
         count=2,
         dividend_type = "follow",
-        fill_data = True,
-        subscribe = False
+        fill_data = False,
+        subscribe = True
     )
     target = []
     
@@ -671,7 +662,7 @@ def buy(ContextInfo):
             # print('开盘时竞价数据查看', ContextInfo.get_stock_name(stock), ticksOfDay[stock])
             # 计算价格波动比例
             price_ratio = round(tick_price / day_close, 4)
-            # print('竞价表现', ContextInfo.get_stock_name(stock), stock,  '开盘价：', tick_price, '昨日收盘价：', day_close, price_ratio)
+            print('竞价表现', ContextInfo.get_stock_name(stock), stock,  '开盘价：', tick_price, '昨日收盘价：', day_close, price_ratio)
 
             
             # 执行筛选条件 高开1.5点以内, 低开5个点以内
@@ -684,7 +675,6 @@ def buy(ContextInfo):
             print(f"处理{stock}时发生错误: {str(e)}")
 
     print('当日开盘筛选后股票池:', target)
-    
     if len(target)==0:
         return
     num = g.stock_num - len(hold_list)
@@ -738,8 +728,8 @@ def sell(ContextInfo):
         end_time = ContextInfo.today.strftime('%Y%m%d'),
         count=3, 
         dividend_type = "follow",
-        fill_data = True, 
-        subscribe = False
+        fill_data = False, 
+        subscribe = True
     )
     ticksData = ContextInfo.get_market_data_ex(
         [],                
@@ -749,8 +739,8 @@ def sell(ContextInfo):
         end_time = ContextInfo.today.strftime('%Y%m%d%H%M%S'),
         count=1,
         dividend_type = "follow",
-        fill_data = True,
-        subscribe = False
+        fill_data = False,
+        subscribe = True
     )
 
     for stock in hold_list:
@@ -783,7 +773,7 @@ def sell(ContextInfo):
         cond2_4 = lastClose == yeserday_high_limit
 
         sell_condition = cond1 and (cond2_1 or cond2_2 or cond2_4)
-
+        print(f"ret_matrix:{ret_matrix} lastClose:{lastClose}  yeserday_high_limit:{yeserday_high_limit}")
         # 7. 核心差异修正：增加跌停不卖出的判断
         if sell_condition and lastPrice > low_limit:
             print(f'【卖出执行】{stock} {ContextInfo.get_stock_name(stock)} 满足条件，执行卖出。')
@@ -978,6 +968,3 @@ class Messager:
         else:
             print('消息发送失败')
 messager = Messager()
-
-
-    
