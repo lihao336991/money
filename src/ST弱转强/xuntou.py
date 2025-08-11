@@ -33,6 +33,7 @@ def init(ContextInfo):
     ContextInfo.set_account(ContextInfo.account)
     ContextInfo.runner = TaskRunner(ContextInfo)
     messager.set_is_test(ContextInfo.do_back_test)
+    getTime(ContextInfo)
     # 定时任务设定
     if ContextInfo.do_back_test:
         print('doing test')
@@ -52,10 +53,13 @@ def init(ContextInfo):
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:30:00","SH")
         ContextInfo.run_time("log_position", "2025-08-01 15:00:00","SH")
 
-def handlebar(ContextInfo):
-    # 新增属性，快捷获取当前日期
-    index = ContextInfo.barpos
-    currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
+def getTime(ContextInfo):
+    if ContextInfo.do_back_test:
+        # 新增属性，快捷获取当前日期
+        index = ContextInfo.barpos
+        currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
+    else:
+        currentTime = time.time() * 1000
     ContextInfo.currentTime = currentTime
     ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
 
@@ -64,6 +68,8 @@ def handlebar(ContextInfo):
     yesterday = yesterday_dt.strftime("%Y%m%d")
     ContextInfo.yesterday = yesterday
 
+def handlebar(ContextInfo):
+    getTime(ContextInfo)
     if (datetime.datetime.now() - datetime.timedelta(days=1) > ContextInfo.today) and not ContextInfo.do_back_test:
         # print('非回测模式，历史不处理')
         return
