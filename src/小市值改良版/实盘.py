@@ -174,7 +174,7 @@ class TradingStrategy:
         self.stock_num: int = 5                    # 每次调仓目标持仓股票数量
         self.up_price: float = 100.0               # 股票价格上限过滤条件（排除股价超过此值的股票）
         self.reason_to_sell: str = ''              # 记录卖出原因（例如：'limitup' 涨停破板 或 'stoploss' 止损）
-        self.stoploss_strategy: int = 3            # 止损策略：1-个股止损；2-大盘止损；3-联合止损策略
+        self.stoploss_strategy: int = 1            # 止损策略：1-个股止损；2-大盘止损；3-联合止损策略
         self.stoploss_limit: float = 0.88          # 个股止损阀值（成本价 × 0.88）
         self.stoploss_market: float = -0.94         # 大盘止损参数（若整体跌幅过大则触发卖出）
 
@@ -274,26 +274,30 @@ class TradingStrategy:
                 ['open', 'close'],                
                 stock_list,
                 period="1d",
-                start_time = (context.today - timedelta(days=1)).strftime('%Y%m%d'),
-                end_time = context.today.strftime('%Y%m%d'),
+                start_time = (context.today - timedelta(days=14)).strftime('%Y%m%d'),
+                end_time = (context.today - timedelta(days=1)).strftime('%Y%m%d'),
                 count=2,
                 dividend_type = "follow",
-                fill_data = True,
+                fill_data = False,
                 subscribe = True
             )
             for stock in data:
-                df = data[stock]
-                df['pre'] = df['close'].shift(1)
-                df['high_limit'] = self.get_limit_of_stock(stock, df['pre'])[0]
-                df['low_limit'] = self.get_limit_of_stock(stock, df['pre'])[1]
-                df['is_down_to_low_limit'] = df['close'] == df['low_limit']
-                df['is_up_to_hight_limit'] = df['close'] == df['high_limit']
-                # 是否涨停
-                if df['is_up_to_hight_limit'].iloc[-1]:
-                    high_list.append(stock)
-                # 是否跌停
-                if df['is_down_to_low_limit'].iloc[-1]:
-                    low_list.append(stock)
+                try:
+                    df = data[stock]
+                    df['pre'] = df['close'].shift(1)
+                    df['high_limit'] = self.get_limit_of_stock(stock, df['pre'])[0]
+                    df['low_limit'] = self.get_limit_of_stock(stock, df['pre'])[1]
+                    df['is_down_to_low_limit'] = df['close'] == df['low_limit']
+                    df['is_up_to_hight_limit'] = df['close'] == df['high_limit']
+                    # 是否涨停
+                    if df['is_up_to_hight_limit'].iloc[-1]:
+                        high_list.append(stock)
+                    # 是否跌停
+                    if df['is_down_to_low_limit'].iloc[-1]:
+                        low_list.append(stock)
+                except:
+                    print(f"股票{stock}涨跌停排查异常, 昨日数据：{df}")
+
         dic = {}
         dic['high_list'] = high_list
         dic['low_list'] = low_list
@@ -315,6 +319,7 @@ class TradingStrategy:
             print("持仓:", self.hold_list)
             # 取出涨停列表
             self.yesterday_HL_list = self.find_limit_list(context, self.hold_list)['high_list']
+            print("昨日涨停:", self.yesterday_HL_list)
 
     # 【回测时使用】回测初始状态跑一遍当时的市值前200名股票，之后都在这200只里选择，为了优化性能（取市值时只能跑全量最新价格，非常费性能）
     def get_stock_pool_when_test(self, context: Any) -> List[str]:
@@ -341,8 +346,8 @@ class TradingStrategy:
             end_time = context.today.strftime('%Y%m%d'),
             count=1,
             dividend_type = "follow",
-            fill_data = True,
-            subscribe = False
+            fill_data = False,
+            subscribe = True
         )
         df_result = pd.DataFrame(columns=['code','name', 'lastPrice', 'market_cap', 'stock_num'])
         seconds_per_year = 365 * 24 * 60 * 60  # 未考虑闰秒
@@ -397,12 +402,12 @@ class TradingStrategy:
             ['close'],                
             initial_list,
             period="1d",
-            start_time = (context.today - timedelta(days=2)).strftime('%Y%m%d'),
+            start_time = (context.today - timedelta(days=12)).strftime('%Y%m%d'),
             end_time = context.today.strftime('%Y%m%d'),
             count=1,
             dividend_type = "follow",
-            fill_data = True,
-            subscribe = False
+            fill_data = False,
+            subscribe = True
         )
         # 选不出来股的时候，这个注释打开看看有没有数
         # print(ticks, '看看tocks')
@@ -417,15 +422,18 @@ class TradingStrategy:
                 stock_num = stock_num_list[-1]
             # money = eps[code].loc[end_date, '资产负债表.固定资产']
             # 筛选出净利润大于0，营业收入大于1e的股票，期末净资产为正的 
-            if eps is not None and eps[code] is not None and finance > 0 and income > 100000000:
-                market_cap = ticks[code].iloc[0, 0] * stock_num
-                df_result = df_result.append({
-                    'code': code,
-                    'name': context.get_stock_name(code),
-                    'market_cap': market_cap,
-                    'lastPrice': ticks[code].iloc[0, 0],
-                    'stock_num': stock_num
-                    }, ignore_index=True)
+            try:
+                if eps is not None and eps[code] is not None and finance > 0 and income > 100000000:
+                    market_cap = ticks[code].iloc[0, 0] * stock_num
+                    df_result = df_result.append({
+                        'code': code,
+                        'name': context.get_stock_name(code),
+                        'market_cap': market_cap,
+                        'lastPrice': ticks[code].iloc[0, 0],
+                        'stock_num': stock_num
+                        }, ignore_index=True)
+            except IndexError:
+                print(f"股票{code}基本面筛查异常, 昨日数据：{ticks[code]}，\finance{finance}\n income:{income},\n stock_num:{stock_num}")
         df_result = df_result.sort_values(by='market_cap', ascending=True)  
         # 缓存df对象，方便查询某只股票数据
         context.stock_df = df_result
@@ -556,22 +564,40 @@ class TradingStrategy:
                 end_time = context.today.strftime('%Y%m%d'),
                 count=2,
                 dividend_type = "follow",
-                fill_data = True,
-                subscribe = False
+                fill_data = False,
+                subscribe = True
             )
-            print(ticksOfDay, '**持仓票信息-day')
+            ticksData = context.get_market_data_ex(
+                [],               
+                self.yesterday_HL_list,
+                period="1m",
+                start_time = (context.today - timedelta(days=1)).strftime('%Y%m%d%H%M%S'),
+                end_time = context.today.strftime('%Y%m%d%H%M%S'),
+                count=1,
+                dividend_type = "follow",
+                fill_data = False,
+                subscribe = True
+            )
+            print(ticksOfDay, '**持仓涨停票信息-day')
             for stock in self.yesterday_HL_list:
-                price = ticksOfDay[stock]["close"].iloc[-1]
-                lastClose = ticksOfDay[stock]["close"].iloc[0]
-                high_limit = self.get_limit_of_stock(stock, lastClose)[0]
+                try:
+                    # 最新价
+                    price = ticksData[stock]["close"].iloc[-1]
+                    # 昨日收盘价
+                    lastClose = ticksOfDay[stock]["close"].iloc[0]
+                    high_limit = self.get_limit_of_stock(stock, lastClose)[0]
 
-                if price < high_limit:
-                    print(f"股票 {stock} 涨停破板，触发卖出操作。")
-                    self.close_position(context, stock)
-                    self.reason_to_sell = 'limitup'
-                else:
-                    print(f"股票 {stock} 仍维持涨停状态。")
+                    if round(price, 2) < high_limit:
+                        print(f"股票 {stock} 涨停破板，触发卖出操作。")
+                        self.close_position(context, stock)
+                        self.reason_to_sell = 'limitup'
+                    else:
+                        print(f"股票 {stock} 仍维持涨停状态。")
+                except:
+                    print(f"股票{stock}涨停检查异常, 昨日数据：{ticksOfDay[stock]}, 当前数据：{ticksData[stock]}")
+
     
+
     def check_remain_amount(self, context: Any) -> None:
         """
         检查账户资金与持仓数量：
@@ -612,7 +638,7 @@ class TradingStrategy:
             end_time = context.today.strftime('%Y%m%d'),
             count=2,
             dividend_type = "follow",
-            fill_data = True,
+            fill_data = False,
             subscribe = True
         )[code]
         lastPrice = data['close'][-1]
@@ -675,7 +701,7 @@ class TradingStrategy:
             end_time = context.today.strftime('%Y%m%d'),
             count=1,
             dividend_type = "follow",
-            fill_data = True,
+            fill_data = False,
             subscribe = True
         )[stock]
         price = data["lastPrice"]
@@ -693,7 +719,7 @@ class TradingStrategy:
             end_time = context.today.strftime('%Y%m%d'),
             count=self.HV_duration,
             dividend_type = "follow",
-            fill_data = True,
+            fill_data = False,
             subscribe = True
         )
         df = ticks[stock]
@@ -1043,6 +1069,7 @@ class TradingStrategy:
 # 创建全局策略实例，策略入口处使用该实例
 strategy = TradingStrategy()
 
+
 # 全局包装函数，必须为顶层函数，保证调度任务可序列化，不使用 lambda
 
 def prepare_stock_list_func(context: Any) -> None:
@@ -1108,7 +1135,6 @@ def trade_afternoon_func(context: Any) -> None:
     """
     print('下午交易阶段...')
     strategy.trade_afternoon(context)
-
 
 def close_account_func(context: Any) -> None:
     """
@@ -1261,6 +1287,7 @@ def init(context: Any) -> None:
         context.runner.run_daily("9:40", prepare_stock_list_func)
         # 10:00 am 止盈止损检测
         context.runner.run_daily("10:00", sell_stocks_func)
+        
         # 14:30 pm 检查需要卖出的持仓
         context.runner.run_daily("14:30", trade_afternoon_func)
         # 14:50 pm 检查当日是否需要一键清仓

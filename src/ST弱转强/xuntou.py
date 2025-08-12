@@ -237,7 +237,7 @@ def get_relative_position_df(ContextInfo, stock_list, date, watch_days, ratio):
             start_time='',
             end_time=date,
             count=watch_days,
-            fill_data=False,
+            fill_data = False,
             subscribe=True
         )
         
@@ -310,7 +310,7 @@ def filter_stocks(ContextInfo, stocks):
             start_time='',
             end_time=yesterday,
             count=30,  # 改为获取30天数据
-            fill_data=False,
+            fill_data = False,
             subscribe=True
         )
         
@@ -572,7 +572,7 @@ def get_turnover_stocks(ContextInfo, stk_list, date):
             start_time='',
             end_time=date,
             count=1,  # 只获取1天数据
-            fill_data=False,
+            fill_data = False,
             subscribe=True
         )
         
@@ -635,7 +635,7 @@ def buy(ContextInfo):
     if len(today_list)==0:
         return
     ticksOfDay = ContextInfo.get_market_data_ex(
-        [],                
+        [],
         today_list,
         period="1d",
         start_time = (ContextInfo.today - datetime.timedelta(days=14)).strftime('%Y%m%d'),
@@ -656,15 +656,18 @@ def buy(ContextInfo):
     # 遍历股票代码进行双数据源校验
     for stock in today_list:
         try:
+            
             # 获取tick数据和日线数据
             tick_price = ticksOfDay[stock]["open"].iloc[-1]
             day_close = ticksOfDay[stock]["close"].iloc[-2]
+            # 昨日成交量
+            volume = ticksOfDay[stock]["volume"].iloc[-2] == 0
+
             # print('开盘时竞价数据查看', ContextInfo.get_stock_name(stock), ticksOfDay[stock])
             # 计算价格波动比例
             price_ratio = round(tick_price / day_close, 4)
-            print('竞价表现', ContextInfo.get_stock_name(stock), stock,  '开盘价：', tick_price, '昨日收盘价：', day_close, price_ratio)
+            print('竞价表现', ContextInfo.get_stock_name(stock), stock,  '开盘价：', tick_price, '昨日收盘价：', day_close, price_ratio, volume)
 
-            
             # 执行筛选条件 高开1.5点以内, 低开5个点以内
             if 0.951 < price_ratio < 1.015:
                 target.append(stock)
@@ -916,7 +919,7 @@ def open_position(context, security: str, value: float = 0):
     # 1102 表示总资金量下单
     print("买入股票(实盘):", security, context.get_stock_name(security), value )
     lastOrderId = str(uuid.uuid4())
-    passorder(23, 1102, context.account, security, 5, -1, value, lastOrderId, 1, lastOrderId, context)
+    passorder(23, 1102, context.account, security, 4, -1, value, lastOrderId, 1, lastOrderId, context)
 
 
 def find_stock_of_positions(positions, stock):
