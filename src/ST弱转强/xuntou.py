@@ -31,7 +31,9 @@ def init(ContextInfo):
     ContextInfo.set_account(ContextInfo.account)
     ContextInfo.runner = TaskRunner(ContextInfo)
     messager.set_is_test(ContextInfo.do_back_test)
-    
+    print('回测模式:', ContextInfo.do_back_test)
+    ContextInfo.currentTime = 0
+
     if not ContextInfo.do_back_test:
         currentTime = time.time() * 1000 + 8 * 3600 * 1000
         print('当前时间', currentTime)
@@ -64,9 +66,13 @@ def init(ContextInfo):
 def handlebar(ContextInfo):
     index = ContextInfo.barpos
     currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
-    if ContextInfo.currentTime < currentTime:
-        ContextInfo.currentTime = currentTime
-        ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
+    try:
+        if ContextInfo.currentTime < currentTime:
+            ContextInfo.currentTime = currentTime
+            ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
+    except Exception as e:
+        print('handlebar异常', currentTime, e)
+
 
     if (datetime.datetime.now() - datetime.timedelta(days=1) > ContextInfo.today) and not ContextInfo.do_back_test:
         # print('非回测模式，历史不处理')
@@ -76,7 +82,7 @@ def handlebar(ContextInfo):
             # 新增属性，快捷获取当前日期
             index = ContextInfo.barpos
             currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
-            print('当前时间', currentTime)
+            # print('当前时间', currentTime)
             ContextInfo.currentTime = currentTime
             ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
 
@@ -680,15 +686,15 @@ def buy(ContextInfo):
             tick_price = ticksOfDay[stock]["open"].iloc[-1]
             day_close = ticksOfDay[stock]["close"].iloc[-2]
             # 昨日成交量
-            volume = ticksOfDay[stock]["volume"].iloc[-2] == 0
+            no_volume = ticksOfDay[stock]["volume"].iloc[-2] == 0
 
             # print('开盘时竞价数据查看', ContextInfo.get_stock_name(stock), ticksOfDay[stock])
             # 计算价格波动比例
             price_ratio = round(tick_price / day_close, 4)
-            print('竞价表现', ContextInfo.get_stock_name(stock), stock,  '开盘价：', tick_price, '昨日收盘价：', day_close, price_ratio, volume)
+            print('竞价表现', ContextInfo.get_stock_name(stock), stock,  '开盘价：', tick_price, '昨日收盘价：', day_close, price_ratio, no_volume)
 
             # 执行筛选条件 高开1.5点以内, 低开5个点以内
-            if 0.951 < price_ratio < 1.015:
+            if 0.951 < price_ratio < 1.015 and not no_volume:
                 target.append(stock)
                 
         except KeyError as e:
