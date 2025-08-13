@@ -62,6 +62,13 @@ def init(ContextInfo):
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:55:00","SH")
 
 def handlebar(ContextInfo):
+    index = ContextInfo.barpos
+    currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
+    if ContextInfo.currentTime < currentTime:
+        ContextInfo.currentTime = currentTime
+        ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
+        # print('当前时间更新', currentTime)
+
     if (datetime.datetime.now() - datetime.timedelta(days=1) > ContextInfo.today) and not ContextInfo.do_back_test:
         # print('非回测模式，历史不处理')
         return
