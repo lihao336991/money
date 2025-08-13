@@ -31,6 +31,18 @@ def init(ContextInfo):
     ContextInfo.set_account(ContextInfo.account)
     ContextInfo.runner = TaskRunner(ContextInfo)
     messager.set_is_test(ContextInfo.do_back_test)
+    
+    if not ContextInfo.do_back_test:
+        currentTime = time.time() * 1000 + 8 * 3600 * 1000
+        print('当前时间', currentTime)
+        ContextInfo.currentTime = currentTime
+        ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
+
+        current_dt = datetime.datetime.fromtimestamp(currentTime / 1000)
+        yesterday_dt = get_previous_trading_day(ContextInfo, current_dt.date())
+        yesterday = yesterday_dt.strftime("%Y%m%d")
+        ContextInfo.yesterday = yesterday
+
     # 定时任务设定
     if ContextInfo.do_back_test:
         print('doing test')
@@ -42,31 +54,32 @@ def init(ContextInfo):
         ContextInfo.runner.run_daily("15:00", log_position)
         
     else:
-        ContextInfo.run_time("prepare","1nDay","2025-08-01 09:25:05","SH")
+        ContextInfo.run_time("prepare","1nDay","2025-08-01 09:20:20","SH")
         # 集合竞价后就尝试下单，最新价是否就是集合竞价收盘价？
-        ContextInfo.run_time("buy","1nDay","2025-08-01 09:26:00","SH")
+        ContextInfo.run_time("buy","1nDay","2025-08-01 09:25:30","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 13:00:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:00:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:55:00","SH")
 
 def handlebar(ContextInfo):
-    # 新增属性，快捷获取当前日期
-    index = ContextInfo.barpos
-    currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
-    ContextInfo.currentTime = currentTime
-    ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
-
-    current_dt = datetime.datetime.fromtimestamp(currentTime / 1000)
-    yesterday_dt = get_previous_trading_day(ContextInfo, current_dt.date())
-    yesterday = yesterday_dt.strftime("%Y%m%d")
-    ContextInfo.yesterday = yesterday
-
     if (datetime.datetime.now() - datetime.timedelta(days=1) > ContextInfo.today) and not ContextInfo.do_back_test:
         # print('非回测模式，历史不处理')
         return
     else:
-        # 检查并执行任务
-        ContextInfo.runner.check_tasks(ContextInfo.today)
+        if ContextInfo.do_back_test:
+            # 新增属性，快捷获取当前日期
+            index = ContextInfo.barpos
+            currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
+            print('当前时间', currentTime)
+            ContextInfo.currentTime = currentTime
+            ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
+
+            current_dt = datetime.datetime.fromtimestamp(currentTime / 1000)
+            yesterday_dt = get_previous_trading_day(ContextInfo, current_dt.date())
+            yesterday = yesterday_dt.strftime("%Y%m%d")
+            ContextInfo.yesterday = yesterday
+            # 检查并执行任务
+            ContextInfo.runner.check_tasks(ContextInfo.today)
         
 def prepare(ContextInfo):
     print('\n\n\n\n\n【新的一天开始准备】##########################', ContextInfo.today)
