@@ -67,7 +67,6 @@ def handlebar(ContextInfo):
     if ContextInfo.currentTime < currentTime:
         ContextInfo.currentTime = currentTime
         ContextInfo.today = pd.to_datetime(currentTime, unit='ms')
-        # print('当前时间更新', currentTime)
 
     if (datetime.datetime.now() - datetime.timedelta(days=1) > ContextInfo.today) and not ContextInfo.do_back_test:
         # print('非回测模式，历史不处理')
@@ -538,7 +537,7 @@ def rzq_list_new(ContextInfo, initial_list):
         initial_list,
         period="1d",
         start_time = (ContextInfo.today - datetime.timedelta(days=14)).strftime('%Y%m%d'),
-        end_time = ContextInfo.today.strftime('%Y%m%d'),
+        end_time = ContextInfo.yesterday,
         count=4,
         dividend_type = "follow",
         fill_data = False,
@@ -549,11 +548,11 @@ def rzq_list_new(ContextInfo, initial_list):
         try:
             print(f"code :{stock} ticksOfDay[stock]:{ticksOfDay[stock]}")
             # 昨日收盘价（倒数第2根K线）
-            lastClose = ticksOfDay[stock]["close"].iloc[-2]
+            lastClose = ticksOfDay[stock]["close"].iloc[-1]
             # 前日收盘价（倒数第3根K线）
-            last2dClose = ticksOfDay[stock]["close"].iloc[-3]
+            last2dClose = ticksOfDay[stock]["close"].iloc[-2]
             # 大前日收盘价（倒数第4根K线）
-            last3dClose = ticksOfDay[stock]["close"].iloc[-4]
+            last3dClose = ticksOfDay[stock]["close"].iloc[-3]
             # 计算涨停价（收盘价*1.05）
             last2dHighLimit = get_limit_of_stock(last3dClose)[0]  # 前日涨停价（基于大前日收盘价）
             last1dHighLimit = get_limit_of_stock(last2dClose)[0]  # 昨日涨停价（基于前日收盘价）
