@@ -171,7 +171,7 @@ class TradingStrategy:
         self.not_buy_again: List[str] = []           # 当天已买入的股票列表，避免重复下单
 
         # 策略交易及风控的参数
-        self.stock_num: int = 5                    # 每次调仓目标持仓股票数量
+        self.stock_num: int = 10                    # 每次调仓目标持仓股票数量
         self.up_price: float = 100.0               # 股票价格上限过滤条件（排除股价超过此值的股票）
         self.reason_to_sell: str = ''              # 记录卖出原因（例如：'limitup' 涨停破板 或 'stoploss' 止损）
         self.stoploss_strategy: int = 1            # 止损策略：1-个股止损；2-大盘止损；3-联合止损策略
@@ -976,7 +976,7 @@ class TradingStrategy:
         target_num = len(self.stocks_to_buy)
         if target_num == 0:
             return
-        value = round(1 /target_num, 2) - 0.001                    
+        value = round(1 /target_num, 2) - 0.005 # 留资金buffer 防止资金不足下单失败                   
         money = self.get_account_money(context)
         print("新的买入目标：", self.stocks_to_buy, "单支买入：", value)
         # # 单支股票需要的买入金额

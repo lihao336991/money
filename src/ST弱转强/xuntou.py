@@ -58,7 +58,7 @@ def init(ContextInfo):
     else:
         ContextInfo.run_time("prepare","1nDay","2025-08-01 09:20:20","SH")
         # 集合竞价后就尝试下单，最新价是否就是集合竞价收盘价？
-        ContextInfo.run_time("buy","1nDay","2025-08-01 09:25:30","SH")
+        ContextInfo.run_time("buy","1nDay","2025-08-01 09:26:10","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 13:00:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:00:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:55:00","SH")
