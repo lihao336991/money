@@ -22,6 +22,8 @@ def initialize(context):
     g.stock_num=4 #最大持仓
 
     g.today_list=[]#当日观测股票
+    g.today_HL_list=[]#当日涨停股票
+    g.today_HL_remove_list=[]#当日涨停移除股票
 
     #----------------Settings--------------------------------------------------/
     run_daily(perpare,time="9:15")
@@ -372,3 +374,26 @@ def GJT_filter_stocks(stocks):
     final_list=list(df.code)
             
     return final_list
+
+
+# 分钟级别检测破板卖出: 
+# 持仓是否涨停，如果涨停，加入当天涨停列表
+# 当天涨停列表在当下是否有变化，涨停打开卖出一半
+def handle_data(context, data):
+    hold_list = [stock for stock in list(context.portfolio.positions.keys()) if stock not in g.today_list]
+    current_data = get_current_data() 
+    for stock in hold_list:
+        # print(stock, '持仓数据:', "最新价", current_data[stock].last_price, "涨停价", current_data[stock].high_limit)
+        # 涨停
+        if current_data[stock].last_price == current_data[stock].high_limit:
+            if stock not in g.today_HL_list:
+                g.today_HL_list.append(stock)
+                print('出现当天涨停股票', stock)
+        else:
+            if stock in g.today_HL_list and stock not in g.today_HL_remove_list:
+                g.today_HL_remove_list.append(stock)
+                log.info(f'{stock}已涨停破板，加入破板列表')
+                # 卖出一半
+                order_target_value(stock, 0)
+                
+                

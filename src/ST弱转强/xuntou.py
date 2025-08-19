@@ -804,12 +804,15 @@ def sell(ContextInfo):
         print(f"ret_matrix:{ret_matrix} lastClose:{lastClose}  yeserday_high_limit:{yeserday_high_limit}")
         # 7. 核心差异修正：增加跌停不卖出的判断
         if sell_condition and lastPrice > low_limit:
-            print(f'【卖出执行】{stock} {ContextInfo.get_stock_name(stock)} 满足条件，执行卖出。')
-            messager.send_message(f"【卖出执行】{ContextInfo.get_stock_name(stock)}")
-            if ContextInfo.do_back_test:
-                order_target_value(stock, 0, ContextInfo, ContextInfo.account)
-            else:
-                passorder(24, 1123, ContextInfo.account, stock, 7, 1, 1, "卖出策略", 1, "", ContextInfo)
+            try:
+                print(f'【卖出执行】{stock} {ContextInfo.get_stock_name(stock)} 满足条件，执行卖出。')
+                messager.send_message(f"【卖出执行】{ContextInfo.get_stock_name(stock)}")
+                if ContextInfo.do_back_test:
+                    order_target_value(stock, 0, ContextInfo, ContextInfo.account)
+                else:
+                    passorder(24, 1123, ContextInfo.account, stock, 7, 1, 1, "卖出策略", 1, "", ContextInfo)
+            except Exception as e:
+                print(f'【卖出执行】{stock} {ContextInfo.get_stock_name(stock)} 卖出失败：{e}')
         else:
             print(f'【不该卖】{stock} {ContextInfo.get_stock_name(stock)} sell_condition: {sell_condition}, lastPrice: {lastPrice}, profit: {profit}， low_limit： {low_limit}')
 
@@ -944,8 +947,10 @@ def open_position(context, security: str, value: float = 0):
     # 1102 表示总资金量下单
     print("买入股票(实盘):", security, context.get_stock_name(security), value )
     lastOrderId = str(uuid.uuid4())
-    passorder(23, 1102, context.account, security, 4, -1, value, lastOrderId, 1, lastOrderId, context)
-
+    try:
+        passorder(23, 1102, context.account, security, 4, -1, value, lastOrderId, 1, lastOrderId, context)
+    except Exception as e:
+        print('买入股票(实盘)失败:', e)
 
 def find_stock_of_positions(positions, stock):
     result = [position for position in positions if codeOfPosition(position) == stock]
