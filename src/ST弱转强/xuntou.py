@@ -12,6 +12,7 @@ import json
 class G():pass
 g = G()
 g.stock_num = 4
+g.max_mount = 150000 # 最大单票买入额，防止账户资金被超买
 
 
 # 配置列表（注意不要删除，注释掉改为自己的就好）
@@ -23,7 +24,7 @@ g.stock_num = 4
 ACCOUNT = '190200026196'
 
 # 李浩的bot
-HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=9432be67-03e1-400f-ad24-6feb1935fafc'
+HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=2a336b4c-c38e-4ae3-9ff6-f14f175b4f73'
 def init(ContextInfo):
     # account = ''
     # 李浩 股票账户
@@ -714,6 +715,7 @@ def buy(ContextInfo):
         money = get_account_money(ContextInfo)
         # 单支股票需要的买入金额
         single_mount = round(money * buyPercent, 2)
+        single_mount = min(single_mount, g.max_mount)
         print(ContextInfo.today, "买入目标：", target,  [ContextInfo.get_stock_name(stock) for stock in target], "单支买入剩余比例：", buyPercent, "金额：", single_mount)
         messager.send_message(f"买入目标：{[ContextInfo.get_stock_name(stock) for stock in target]}, 单支买入金额：{single_mount}")
         for stock in target:
@@ -948,15 +950,13 @@ def open_position(context, security: str, value: float = 0):
     print("买入股票(实盘):", security, context.get_stock_name(security), value )
     lastOrderId = str(uuid.uuid4())
     try:
-        passorder(23, 1102, context.account, security, 4, -1, value, lastOrderId, 1, lastOrderId, context)
+        passorder(23, 1102, context.account, security, 3, -1, value, lastOrderId, 1, lastOrderId, context)
     except Exception as e:
         print('买入股票(实盘)失败:', e)
 
 def find_stock_of_positions(positions, stock):
     result = [position for position in positions if codeOfPosition(position) == stock]
     if result:
-        print('有持仓', stock, result[0])
-
         return result[0]
 
 

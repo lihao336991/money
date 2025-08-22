@@ -31,14 +31,14 @@ g.buyValue = 0
 
 def is_trading():
     current_time = datetime.now().time()
-    return time(9,0) <= current_time <= time(15,0)
+    return time(9,0) <= current_time <= time(16,0)
 
 class Messager:
     def __init__(self):
         # 消息通知
-        self.webhook1 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=6c1bd45a-74a7-4bd0-93ce-00b2e7157adc'
+        self.webhook1 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618'
         # 日志记录
-        self.webhook2 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a1f9970c-4914-49de-b69a-e447a5d97c64'
+        self.webhook2 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618'
     def set_is_test(self, is_test):
         self.is_test = is_test
     def send_message(self, webhook, message):
@@ -1349,9 +1349,9 @@ def deal_callback(context, dealInfo):
     value = dealInfo.m_dTradeAmount
     print(f"已{dealInfo.m_nDirection}股票 {stock}，成交额 {value:.2f}")
     strategy.not_buy_again.append(stock)
-    messager.sendLog(f"已{dealInfo.m_nDirection}股票 {stock}，成交额 {value:.2f}")    
+    # messager.sendLog(f"{stock} 已成交，成交额 {value:.2f}")    
     # 回测模式不发
-    messager.send_deal(dealInfo)
+    # messager.send_deal(dealInfo)
     
 
 def orderError_callback(context, orderArgs, errMsg):
@@ -1359,7 +1359,7 @@ def orderError_callback(context, orderArgs, errMsg):
     
 def order_callback(context, orderInfo):
     print("委托信息变更回调", context.get_stock_name(strategy.codeOfPosition(orderInfo)))
-    messager.sendLog(f"委托状态变化回调" + context.get_stock_name(strategy.codeOfPosition(orderInfo)))
+    messager.sendLog(f"已委托： " + context.get_stock_name(strategy.codeOfPosition(orderInfo)))
     
 
 

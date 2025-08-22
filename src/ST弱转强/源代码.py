@@ -65,6 +65,7 @@ def perpare(context):#筛选
     log.info (f"股池数{len(g.today_list)}")
     log.info (f"股池{g.today_list}")
 
+
 def sell(context):
     hold_list = [stock for stock in list(context.portfolio.positions.keys()) if stock not in g.today_list]
     if hold_list:
@@ -87,10 +88,16 @@ def sell(context):
         cond2_1 = ret_matrix < -3
         # 条件2.2：盈利超过0%（复用矩阵）
         cond2_2 = ret_matrix >= 0
+        # 条件2.3：持仓时间超过3日
+        # 标准化时间类型
+        current_dt = pd.to_datetime(context.current_dt)
+        df_history['init_time']= [context.portfolio.positions[s].init_time for s in hold_list]
+        # init_time = pd.to_datetime(context.portfolio.positions[s].init_time)
+        cond2_3 = (current_dt - pd.to_datetime(df_history['init_time'])).dt.days >= 4
         # 条件2.4：昨日涨停（批量计算）
         cond2_4 = (df_history['close'] == df_history['high_limit'])
         #正常止盈止损
-        sell_condition = cond1 &(cond2_1 | cond2_2 | cond2_4)
+        sell_condition = cond1 &(cond2_1 | cond2_2 | cond2_4 | cond2_3)
 
         sell_list = df_history[
             sell_condition & 
