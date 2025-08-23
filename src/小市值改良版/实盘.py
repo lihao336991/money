@@ -105,7 +105,7 @@ class Messager:
         if total_profit > 0:
             total_profit = f"<font color='info'>{total_profit:.2f}</font>"
         else:
-            total_profit = f"<font color='warning'>-{total_profit:.2f}</font>"
+            total_profit = f"<font color='warning'>{total_profit:.2f}</font>"
 
         for index, row in df_result.iterrows():
             row_str = self.get_position_markdown(row)
@@ -128,19 +128,19 @@ class Messager:
         if ratio_str > 0:
             ratio_str = f"<font color='info'>{ratio_str:.2f}%</font>"
         else:
-            ratio_str = f"<font color='warning'>-{ratio_str:.2f}%</font>"
+            ratio_str = f"<font color='warning'>{ratio_str:.2f}%</font>"
         profit = position['profit']
         if profit > 0:
             profit = f"<font color='info'>{profit:.2f}</font>"
         else:
-            profit = f"<font color='warning'>-{profit:.2f}</font>"
+            profit = f"<font color='warning'>{profit:.2f}</font>"
         return f"""
     **{stock}**
     ├─ 当前价：{price:.2f}
     ├─ 成本价：{open_price:.2f}
     ├─ 持仓额：{amount:.2f}
     ├─ 盈亏率：{ratio_str}
-    └─ 盈亏额：{profit}
+    └─ 当日盈亏：{profit}
         """
 messager = Messager()
 class Log:
@@ -496,12 +496,15 @@ class TradingStrategy:
         打印目标股票列表信息，用于人工确认程序无误（有时候平台接口抽风，选出来的股票并非小市值）。
         """
         print("***** 目标股票池信息如下：******")
+        msg = ""
         for code in stock_list:
             if not context.stock_df[context.stock_df['code'] == code].empty:
                 market_cap = context.stock_df[context.stock_df['code'] == code]['market_cap'].iloc[0] / 100000000
             else:
                 market_cap = None  # 或其他默认值
-            messager.sendLog(f"股票代码：{code}，股票名称：{context.get_stock_name(code)}, 市值：{market_cap:.2f}")
+            msg += f"股票代码：{code}，股票名称：{context.get_stock_name(code)}, 市值：{market_cap:.2f}\n"
+        messager.sendLog(msg)
+
 
     def weekly_adjustment(self, context: Any) -> None:
         """
