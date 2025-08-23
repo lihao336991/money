@@ -1281,6 +1281,12 @@ def init(context: Any) -> None:
 
     # 注册调度任务，所有任务均使用顶层包装函数（不使用 lambda 以确保可序列化）
     
+    # 判断当前日期是否为周末，如果是则直接返回
+    current_weekday = datetime.now().weekday()
+    if current_weekday >= 5:  # 5表示周六，6表示周日
+        print('当前日期为周末，不执行任务')
+        return
+
     # 实盘和回测不一样的地方在于，可以使用run_time函数，不需要等到盘中才执行定时逻辑，因此部分逻辑执行时间可以前置
     if context.do_back_test:
         # -------------------每日执行任务 --------------------------------

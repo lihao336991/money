@@ -46,6 +46,12 @@ def init(ContextInfo):
         yesterday = yesterday_dt.strftime("%Y%m%d")
         ContextInfo.yesterday = yesterday
 
+    # 判断当前日期是否为周末，如果是则直接返回
+    current_weekday = datetime.datetime.now().weekday()
+    if current_weekday >= 5:  # 5表示周六，6表示周日
+        print('当前日期为周末，不执行任务')
+        return
+
     # 定时任务设定
     if ContextInfo.do_back_test:
         print('doing test')
@@ -65,6 +71,7 @@ def init(ContextInfo):
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:55:00","SH")
 
 def handlebar(ContextInfo):
+    
     index = ContextInfo.barpos
     currentTime = ContextInfo.get_bar_timetag(index) + 8 * 3600 * 1000
     try:
