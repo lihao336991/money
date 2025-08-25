@@ -1069,62 +1069,6 @@ class TradingStrategy:
             messager.sendMsg("持仓状态：空仓")
             messager.send_account_info(context)
 
-    # 分钟级别检测: 
-    # 持仓是否涨停，如果涨停，加入当天涨停列表
-    # 当天涨停列表在当下是否有变化，涨停打开卖出
-    def handle_limit_up_broke(self, context):
-        hold_list = self.hold_list
-        
-        yesterday_data = context.get_market_data_ex(
-            [],                
-            hold_list,
-            period="1d", 
-            start_time = (context.today - datetime.timedelta(days=14)).strftime('%Y%m%d'),
-            end_time = context.today.strftime('%Y%m%d'),
-            count=3, 
-            dividend_type = "follow",
-            fill_data = False, 
-            subscribe = True
-        )
-        current_data = context.get_market_data_ex(
-            [],
-            hold_list,
-            period="1m",
-            start_time = (context.today - datetime.timedelta(days=1)).strftime('%Y%m%d%H%M%S'),
-            end_time = context.today.strftime('%Y%m%d%H%M%S'),
-            count=1,
-            dividend_type = "follow",
-            fill_data = False,
-            subscribe = True            
-        )
-        for stock in hold_list:
-            try:
-                # --- Data Validation ---
-                if stock not in yesterday_data or yesterday_data[stock].empty:
-                    continue
-                if stock not in current_data or current_data[stock].empty:
-                    continue
-
-                # --- Price Extraction ---
-                lastClose = round(yesterday_data[stock]["close"].iloc[-2], 2)
-                latest_price = round(current_data[stock]["close"].iloc[0], 2)
-                open_price = round(current_data[stock]["open"].iloc[0], 2)
-                
-                # --- Logic ---
-                high_limit = self.get_limit_of_stock(stock, lastClose)[0]
-                
-                # Use a small tolerance for float comparison
-                is_open_at_limit = abs(open_price - high_limit) < 0.001 
-                is_broken = latest_price < high_limit
-
-                if is_open_at_limit and is_broken:
-                    if stock not in g.today_HL_remove_list:
-                        g.today_HL_remove_list.append(stock)
-                        print('出现当天涨停破板股票，卖出：', stock, '当前价格：', latest_price, '涨停价格：', high_limit)
-                        self.close_position(context, stock)
-            except Exception as e:
-                log.error(f"Error processing {stock} in handle_limit_up_broke: {e}")
-                continue
 # 创建全局策略实例，策略入口处使用该实例
 strategy = TradingStrategy()
 
@@ -1398,9 +1342,6 @@ def handlebar(context):
     currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
     context.currentTime = currentTime
     context.today = pd.to_datetime(currentTime, unit='ms')
-
-    # 处理涨停破板
-    strategy.handle_limit_up_broke(context)
 
     if (datetime.now() - timedelta(days=1) > context.today) and not context.do_back_test:
         # print('非回测模式，历史不处理')
