@@ -81,7 +81,7 @@ class Messager:
     def send_account_info(self, context):
         accounts = get_trade_detail_data(context.account, 'stock', 'account')
         for dt in accounts:
-            self.sendMsg(f'总资产: {dt.m_dBalance:.2f},\n总市值: {dt.m_dInstrumentValue:.2f},\n' + f'可用金额: {dt.m_dAvailable:.2f},\n盈亏: {dt.m_dPositionProfit:.2f}')
+            self.sendMsg(f'总资产: {dt.m_dBalance:.2f},\n总市值: {dt.m_dInstrumentValue:.2f},\n' + f'可用金额: {dt.m_dAvailable:.2f},\n持仓总盈亏: {dt.m_dPositionProfit:.2f}')
         
     def send_positions(self, context):
         if context.do_back_test:
