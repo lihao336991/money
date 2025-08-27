@@ -203,10 +203,11 @@ class TradingStrategy:
             context: 聚宽平台传入的交易上下文对象
         """
         
-        now = datetime.now()
-        context.currentTime = int(now.timestamp() * 1000)
-        context.today = now
-        print(context.today)
+        currentTime = nativeTime.time() * 1000 + 8 * 3600 * 1000
+        print('当前时间', currentTime)
+        context.currentTime = currentTime
+        context.today = pd.to_datetime(currentTime, unit='ms')
+
         # 注意：调度任务由全局包装函数统一注册，避免 lambda 导致序列化问题
         context.account = MY_ACCOUNT
         context.set_account(context.account)
@@ -1338,11 +1339,17 @@ def checkTask(context):
 # 在handlebar函数中调用（假设当前K线时间戳为dt）
 def handlebar(context):
     # 新增属性，快捷获取当前日期
+    
     index = context.barpos
     currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
-    context.currentTime = currentTime
-    context.today = pd.to_datetime(currentTime, unit='ms')
-
+    try:
+        # 第一根k的时间是昨天，所以这里做下判断，只对增量更新
+        if context.currentTime < currentTime:
+            context.currentTime = currentTime
+            context.today = pd.to_datetime(currentTime, unit='ms')
+    except Exception as e:
+        print('handlebar异常', currentTime, e)
+        
     if (datetime.now() - timedelta(days=1) > context.today) and not context.do_back_test:
         # print('非回测模式，历史不处理')
         return
