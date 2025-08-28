@@ -16,9 +16,9 @@ import time as nativeTime
 
 # 设置账号
 # 腾腾实盘
-# MY_ACCOUNT = "190200051469"
+MY_ACCOUNT = "190200051469"
 # 我的模拟
-MY_ACCOUNT = "620000204906"
+# MY_ACCOUNT = "620000204906"
 
 IS_MOCK = True
 
@@ -28,18 +28,23 @@ class G():pass
 g = G()
 g.orderIdMap = {}
 g.buyValue = 0
+g.today_HL_remove_list = []
 
 def is_trading():
     current_time = datetime.now().time()
-    return time(9,0) <= current_time <= time(15,0)
+    return time(9,0) <= current_time <= time(16,0)
 
 class Messager:
     def __init__(self):
         # 消息通知
-        self.webhook1 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=6c1bd45a-74a7-4bd0-93ce-00b2e7157adc'
+        self.webhook1 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618'
         # 日志记录
-        self.webhook2 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a1f9970c-4914-49de-b69a-e447a5d97c64'
+        self.webhook2 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618'
+    def set_is_test(self, is_test):
+        self.is_test = is_test
     def send_message(self, webhook, message):
+        if self.is_test:
+            return
         # 设置企业微信机器人的Webhook地址
         headers = {'Content-Type': 'application/json; charset=UTF-8'}
         data = {
@@ -60,8 +65,7 @@ class Messager:
         print(message)
 
     def sendMsg(self, message):
-        if is_trading():
-            self.send_message(self.webhook1, message)
+        self.send_message(self.webhook1, message)
   
     def send_deal(self, dealInfo):
         stock = dealInfo.m_strProductName
@@ -77,7 +81,7 @@ class Messager:
     def send_account_info(self, context):
         accounts = get_trade_detail_data(context.account, 'stock', 'account')
         for dt in accounts:
-            self.sendMsg(f'总资产: {dt.m_dBalance:.2f},\n总市值: {dt.m_dInstrumentValue:.2f},\n' + f'可用金额: {dt.m_dAvailable:.2f},\n盈亏: {dt.m_dPositionProfit:.2f}')
+            self.sendMsg(f'总资产: {dt.m_dBalance:.2f},\n总市值: {dt.m_dInstrumentValue:.2f},\n' + f'可用金额: {dt.m_dAvailable:.2f},\n持仓总盈亏: {dt.m_dPositionProfit:.2f}')
         
     def send_positions(self, context):
         if context.do_back_test:
@@ -102,7 +106,7 @@ class Messager:
         if total_profit > 0:
             total_profit = f"<font color='info'>{total_profit:.2f}</font>"
         else:
-            total_profit = f"<font color='warning'>-{total_profit:.2f}</font>"
+            total_profit = f"<font color='warning'>{total_profit:.2f}</font>"
 
         for index, row in df_result.iterrows():
             row_str = self.get_position_markdown(row)
@@ -125,19 +129,19 @@ class Messager:
         if ratio_str > 0:
             ratio_str = f"<font color='info'>{ratio_str:.2f}%</font>"
         else:
-            ratio_str = f"<font color='warning'>-{ratio_str:.2f}%</font>"
+            ratio_str = f"<font color='warning'>{ratio_str:.2f}%</font>"
         profit = position['profit']
         if profit > 0:
             profit = f"<font color='info'>{profit:.2f}</font>"
         else:
-            profit = f"<font color='warning'>-{profit:.2f}</font>"
+            profit = f"<font color='warning'>{profit:.2f}</font>"
         return f"""
     **{stock}**
     ├─ 当前价：{price:.2f}
     ├─ 成本价：{open_price:.2f}
     ├─ 持仓额：{amount:.2f}
     ├─ 盈亏率：{ratio_str}
-    └─ 盈亏额：{profit}
+    └─ 当日盈亏：{profit}
         """
 messager = Messager()
 class Log:
@@ -168,10 +172,10 @@ class TradingStrategy:
         self.not_buy_again: List[str] = []           # 当天已买入的股票列表，避免重复下单
 
         # 策略交易及风控的参数
-        self.stock_num: int = 7                    # 每次调仓目标持仓股票数量
+        self.stock_num: int = 10                    # 每次调仓目标持仓股票数量
         self.up_price: float = 100.0               # 股票价格上限过滤条件（排除股价超过此值的股票）
         self.reason_to_sell: str = ''              # 记录卖出原因（例如：'limitup' 涨停破板 或 'stoploss' 止损）
-        self.stoploss_strategy: int = 3            # 止损策略：1-个股止损；2-大盘止损；3-联合止损策略
+        self.stoploss_strategy: int = 1            # 止损策略：1-个股止损；2-大盘止损；3-联合止损策略
         self.stoploss_limit: float = 0.88          # 个股止损阀值（成本价 × 0.88）
         self.stoploss_market: float = -0.94         # 大盘止损参数（若整体跌幅过大则触发卖出）
 
@@ -199,10 +203,11 @@ class TradingStrategy:
             context: 聚宽平台传入的交易上下文对象
         """
         
-        now = datetime.now()
-        context.currentTime = int(now.timestamp() * 1000)
-        context.today = now
-        print(context.today)
+        currentTime = nativeTime.time() * 1000 + 8 * 3600 * 1000
+        print('当前时间', currentTime)
+        context.currentTime = currentTime
+        context.today = pd.to_datetime(currentTime, unit='ms')
+
         # 注意：调度任务由全局包装函数统一注册，避免 lambda 导致序列化问题
         context.account = MY_ACCOUNT
         context.set_account(context.account)
@@ -211,8 +216,8 @@ class TradingStrategy:
     # 根据股票代码和收盘价，计算次日涨跌停价格
     def get_limit_of_stock(self, stock_code, last_close):
         if str(stock_code).startswith(tuple(['3', '688'])):
-            return [round(last_close * 1.2, 2), round(last_close * 0.8), 2]
-        return [round(last_close * 1.1, 2), round(last_close * 0.9), 2]
+            return [round(last_close * 1.2, 2), round(last_close * 0.8, 2)]
+        return [round(last_close * 1.1, 2), round(last_close * 0.9, 2)]
     # 根据股票代码，查询公司总市值
     def get_market_cup(self, context, code):
         data = context.get_instrumentdetail(code)
@@ -271,26 +276,30 @@ class TradingStrategy:
                 ['open', 'close'],                
                 stock_list,
                 period="1d",
-                start_time = (context.today - timedelta(days=1)).strftime('%Y%m%d'),
-                end_time = context.today.strftime('%Y%m%d'),
+                start_time = (context.today - timedelta(days=14)).strftime('%Y%m%d'),
+                end_time = (context.today - timedelta(days=1)).strftime('%Y%m%d'),
                 count=2,
                 dividend_type = "follow",
-                fill_data = True,
+                fill_data = False,
                 subscribe = True
             )
             for stock in data:
-                df = data[stock]
-                df['pre'] = df['close'].shift(1)
-                df['high_limit'] = self.get_limit_of_stock(stock, df['pre'])[0]
-                df['low_limit'] = self.get_limit_of_stock(stock, df['pre'])[1]
-                df['is_down_to_low_limit'] = df['close'] == df['low_limit']
-                df['is_up_to_hight_limit'] = df['close'] == df['high_limit']
-                # 是否涨停
-                if df['is_up_to_hight_limit'].iloc[-1]:
-                    high_list.append(stock)
-                # 是否跌停
-                if df['is_down_to_low_limit'].iloc[-1]:
-                    low_list.append(stock)
+                try:
+                    df = data[stock]
+                    df['pre'] = df['close'].shift(1)
+                    df['high_limit'] = self.get_limit_of_stock(stock, df['pre'])[0]
+                    df['low_limit'] = self.get_limit_of_stock(stock, df['pre'])[1]
+                    df['is_down_to_low_limit'] = df['close'] == df['low_limit']
+                    df['is_up_to_hight_limit'] = df['close'] == df['high_limit']
+                    # 是否涨停
+                    if df['is_up_to_hight_limit'].iloc[-1]:
+                        high_list.append(stock)
+                    # 是否跌停
+                    if df['is_down_to_low_limit'].iloc[-1]:
+                        low_list.append(stock)
+                except:
+                    print(f"股票{stock}涨跌停排查异常, 昨日数据：{df}")
+
         dic = {}
         dic['high_list'] = high_list
         dic['low_list'] = low_list
@@ -312,6 +321,17 @@ class TradingStrategy:
             print("持仓:", self.hold_list)
             # 取出涨停列表
             self.yesterday_HL_list = self.find_limit_list(context, self.hold_list)['high_list']
+            print("昨日涨停:", self.yesterday_HL_list)
+        # 读取昨日滚动写入的target_list
+        try:
+             with open('target_list.txt', 'r') as f:
+                 self.target_list = [line.strip() for line in f.readlines()]
+             stock_names = [context.get_stock_name(code) for code in self.target_list]
+             print(f"成功从文件读取 target_list: {stock_names}")
+             messager.sendLog(f"成功从缓存文件读取target_list: {stock_names}")
+        except FileNotFoundError:
+             print("未找到 target_list.txt 文件，列表将为空")
+             self.target_list = [] 
 
     # 【回测时使用】回测初始状态跑一遍当时的市值前200名股票，之后都在这200只里选择，为了优化性能（取市值时只能跑全量最新价格，非常费性能）
     def get_stock_pool_when_test(self, context: Any) -> List[str]:
@@ -338,8 +358,8 @@ class TradingStrategy:
             end_time = context.today.strftime('%Y%m%d'),
             count=1,
             dividend_type = "follow",
-            fill_data = True,
-            subscribe = False
+            fill_data = False,
+            subscribe = True
         )
         df_result = pd.DataFrame(columns=['code','name', 'lastPrice', 'market_cap', 'stock_num'])
         seconds_per_year = 365 * 24 * 60 * 60  # 未考虑闰秒
@@ -394,12 +414,12 @@ class TradingStrategy:
             ['close'],                
             initial_list,
             period="1d",
-            start_time = (context.today - timedelta(days=2)).strftime('%Y%m%d'),
+            start_time = (context.today - timedelta(days=12)).strftime('%Y%m%d'),
             end_time = context.today.strftime('%Y%m%d'),
             count=1,
             dividend_type = "follow",
-            fill_data = True,
-            subscribe = False
+            fill_data = False,
+            subscribe = True
         )
         # 选不出来股的时候，这个注释打开看看有没有数
         # print(ticks, '看看tocks')
@@ -414,19 +434,39 @@ class TradingStrategy:
                 stock_num = stock_num_list[-1]
             # money = eps[code].loc[end_date, '资产负债表.固定资产']
             # 筛选出净利润大于0，营业收入大于1e的股票，期末净资产为正的 
-            if eps is not None and eps[code] is not None and finance > 0 and income > 100000000:
-                market_cap = ticks[code].iloc[0, 0] * stock_num
-                df_result = df_result.append({
-                    'code': code,
-                    'name': context.get_stock_name(code),
-                    'market_cap': market_cap,
-                    'lastPrice': ticks[code].iloc[0, 0],
-                    'stock_num': stock_num
-                    }, ignore_index=True)
-        df_result = df_result.sort_values(by='market_cap', ascending=True)
+            try:
+                if eps is not None and eps[code] is not None and finance > 0 and income > 100000000:
+                    market_cap = ticks[code].iloc[0, 0] * stock_num
+                    df_result = df_result.append({
+                        'code': code,
+                        'name': context.get_stock_name(code),
+                        'market_cap': market_cap,
+                        'lastPrice': ticks[code].iloc[0, 0],
+                        'stock_num': stock_num
+                        }, ignore_index=True)
+            except IndexError:
+                print(f"股票{code}基本面筛查异常, 昨日数据：{ticks[code]}，\finance{finance}\n income:{income},\n stock_num:{stock_num}")
+        df_result = df_result.sort_values(by='market_cap', ascending=True)  
+        # 缓存df对象，方便查询某只股票数据
+        context.stock_df = df_result
         stock_list: List[str] = list(df_result.code)
         # print("看看前20的股票", df_result[:20])
+        try:
+            with open('target_list.txt', 'w') as f:
+                for stock in stock_list[:20]:
+                    f.write(f"{stock}\n")
+            print("已将 target_list 写入 target_list.txt")
+        except Exception as e:
+            print(f"写入 target_list.txt 文件失败: {e}")
         return stock_list
+    
+    # 定期获取目标股票列表，并写入本地文件
+    def internal_get_target_list(self, context: Any) -> List[str]:
+        # 缓存一条离线target_list，调仓日会拿实时数据与之比较，当有较多股票不一致时，发送警告给我
+        context.cache_target_list = self.get_stock_list(context)
+        messager.sendLog("离线调仓数据整理完毕，目标持股列表如下" )
+        self.log_target_list(context, context.cache_target_list)
+        
 
     def get_stock_list(self, context: Any) -> List[str]:
         """
@@ -461,19 +501,6 @@ class TradingStrategy:
 
         print(f"候选股票{len(final_list)}只: {final_list}")
 
-        # 下面注释部分不参与实际功能，只是日志打印，暂时忽略
-        # 查询并输出候选股票的财务信息（如财报日期、营业收入、EPS）
-        # if final_list:
-        #     info_query = query(
-        #         valuation.code,
-        #         income.pubDate,
-        #         income.statDate,
-        #         income.operating_revenue,
-        #         indicator.eps
-        #     ).filter(valuation.code.in_(final_list))
-        #     df_info = get_fundamentals(info_query)
-        #     for _, row in df_info.iterrows():
-        #         print(f"股票 {row['code']}：报告日期 {row.get('pubDate', 'N/A')}，统计日期 {row.get('statDate', 'N/A')}，营业收入 {row.get('operating_revenue', 'N/A')}，EPS {row.get('eps', 'N/A')}")
         return final_list
     
     def find_target_stock_list(self, context):
@@ -483,6 +510,21 @@ class TradingStrategy:
         for code in target_list:
             print(context.get_stock_name(code))
 
+    def log_target_list(self, context: Any, stock_list: List[str]) -> None:
+        """
+        打印目标股票列表信息，用于人工确认程序无误（有时候平台接口抽风，选出来的股票并非小市值）。
+        """
+        print("***** 目标股票池信息如下：******")
+        msg = ""
+        for code in stock_list:
+            if not context.stock_df[context.stock_df['code'] == code].empty:
+                market_cap = context.stock_df[context.stock_df['code'] == code]['market_cap'].iloc[0] / 100000000
+            else:
+                market_cap = None  # 或其他默认值
+            msg += f"股票代码：{code}，股票名称：{context.get_stock_name(code)}, 市值：{market_cap:.2f}\n"
+        messager.sendLog(msg)
+
+
     def weekly_adjustment(self, context: Any) -> None:
         """
         每周调仓策略：
@@ -491,14 +533,27 @@ class TradingStrategy:
 
         """
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
-        self.hold_list = [self.codeOfPosition(position) for position in self.positions]
+        self.hold_list = [self.codeOfPosition(position) for position in self.positions if position.m_dMarketValue > 10000]
         print(self.no_trading_today_signal, '禁止交易信号')
         if not self.no_trading_today_signal:
             self.target_list = self.get_stock_list(context)
             # 取目标持仓数以内的股票作为调仓目标
             target_list: List[str] = self.target_list[:self.stock_num]
+            self.target_list = target_list
             print(f"每周调仓目标股票: {target_list}")
+            self.log_target_list(context, target_list)
             print(f"当前持有股票: {self.hold_list}")
+            
+            # 计算调仓数量并发送告警
+            stocks_to_sell = [stock for stock in self.hold_list if stock not in target_list and stock not in self.yesterday_HL_list]
+            stocks_to_buy = [stock for stock in target_list if stock not in self.hold_list]
+            self.stocks_to_buy = stocks_to_buy
+            adjustment_count = len(stocks_to_sell) + len(stocks_to_buy)
+            if adjustment_count > 3:
+                # 显示具体股票代码而非仅数量
+                alert_msg = f"大规模调仓警告：需调整{adjustment_count}只股票（卖出{len(stocks_to_sell)}只: {', '.join(stocks_to_sell)}, 买入{len(stocks_to_buy)}只: {', '.join(stocks_to_buy)}）"
+                messager.sendLog(alert_msg)
+
             for stock in self.hold_list:
                 if stock not in target_list and stock not in self.yesterday_HL_list:
                     print(f"卖出股票 {stock}")
@@ -506,21 +561,15 @@ class TradingStrategy:
                 else:
                     print(f"持有股票 {stock}")
 
-
     def weekly_adjustment_buy(self, context: Any) -> None:
         print('调仓买入阶段...是否在禁止交易窗口：', self.no_trading_today_signal)
         if not self.no_trading_today_signal:
             # 遍历当前持仓，若股票不在目标列表且非昨日涨停，则执行卖出操作
             target_list: List[str] = self.target_list[:self.stock_num]
-            self.not_buy_again = []  # 重置当天已买入记录
 
             # 对目标股票执行买入操作
-            self.buy_security(context, target_list)
-            if self.positions:
-                # 更新当天已买入记录，防止重复买入
-                for position in self.positions:
-                    if self.codeOfPosition(position) not in self.not_buy_again:
-                        self.not_buy_again.append(self.codeOfPosition(position))
+            # self.buy_security(context, target_list)
+            self.new_buy_target(context)
 
     def check_limit_up(self, context: Any) -> None:
         """
@@ -537,22 +586,40 @@ class TradingStrategy:
                 end_time = context.today.strftime('%Y%m%d'),
                 count=2,
                 dividend_type = "follow",
-                fill_data = True,
-                subscribe = False
+                fill_data = False,
+                subscribe = True
             )
-            print(ticksOfDay, '**持仓票信息-day')
+            ticksData = context.get_market_data_ex(
+                [],               
+                self.yesterday_HL_list,
+                period="1m",
+                start_time = (context.today - timedelta(days=1)).strftime('%Y%m%d%H%M%S'),
+                end_time = context.today.strftime('%Y%m%d%H%M%S'),
+                count=1,
+                dividend_type = "follow",
+                fill_data = False,
+                subscribe = True
+            )
+            print(ticksOfDay, '**持仓涨停票信息-day')
             for stock in self.yesterday_HL_list:
-                price = ticksOfDay[stock]["close"].iloc[-1]
-                lastClose = ticksOfDay[stock]["close"].iloc[0]
-                high_limit = self.get_limit_of_stock(stock, lastClose)[0]
+                try:
+                    # 最新价
+                    price = ticksData[stock]["close"].iloc[-1]
+                    # 昨日收盘价
+                    lastClose = ticksOfDay[stock]["close"].iloc[0]
+                    high_limit = self.get_limit_of_stock(stock, lastClose)[0]
 
-                if price < high_limit:
-                    print(f"股票 {stock} 涨停破板，触发卖出操作。")
-                    self.close_position(context, stock)
-                    self.reason_to_sell = 'limitup'
-                else:
-                    print(f"股票 {stock} 仍维持涨停状态。")
+                    if round(price, 2) < high_limit:
+                        print(f"股票 {stock} 涨停破板，触发卖出操作。")
+                        self.close_position(context, stock)
+                        self.reason_to_sell = 'limitup'
+                    else:
+                        print(f"股票 {stock} 仍维持涨停状态。")
+                except:
+                    print(f"股票{stock}涨停检查异常, 昨日数据：{ticksOfDay[stock]}, 当前数据：{ticksData[stock]}")
+
     
+
     def check_remain_amount(self, context: Any) -> None:
         """
         检查账户资金与持仓数量：
@@ -593,7 +660,7 @@ class TradingStrategy:
             end_time = context.today.strftime('%Y%m%d'),
             count=2,
             dividend_type = "follow",
-            fill_data = True,
+            fill_data = False,
             subscribe = True
         )[code]
         lastPrice = data['close'][-1]
@@ -656,7 +723,7 @@ class TradingStrategy:
             end_time = context.today.strftime('%Y%m%d'),
             count=1,
             dividend_type = "follow",
-            fill_data = True,
+            fill_data = False,
             subscribe = True
         )[stock]
         price = data["lastPrice"]
@@ -674,7 +741,7 @@ class TradingStrategy:
             end_time = context.today.strftime('%Y%m%d'),
             count=self.HV_duration,
             dividend_type = "follow",
-            fill_data = True,
+            fill_data = False,
             subscribe = True
         )
         df = ticks[stock]
@@ -848,52 +915,6 @@ class TradingStrategy:
         
         passorder(23, 1102, context.account, security, 5, -1, value, lastOrderId, 1, lastOrderId, context)
 
-
-    # 轮训检查待买列表状态，进行撤单和重买。直至全部成交
-    def loopCheckBuyListStatus(self, context, num = 0):
-        if context.do_back_test:
-            return
-        nativeTime.sleep(60)
-        print('每60s检测一下成交状态', num)
-        positions = get_trade_detail_data(context.account, 'stock', 'position')
-        
-        # 委托查询
-        orders = get_trade_detail_data(context.account, 'stock', 'order')
-        # 筛选出目标股票的委托，且处于已报、待报、部成状态的（有未成交且未撤的）
-        # https://dict.thinktrader.net/innerApi/enum_constants.html#enum-eentruststatus-%E5%A7%94%E6%89%98%E7%8A%B6%E6%80%81
-        target_orders = [x for x in orders if x.m_nOrderStatus in [49, 50, 55] ]
-        print(target_orders)
-        if len(target_orders) == 0:
-            print("无待成交委托")
-            return
-        
-        # 先全撤掉
-        for order in target_orders:
-            if order.m_nVolumeTotal > 0:
-                code = self.codeOfPosition(order)
-                cancel(order.m_strOrderSysID, context.account, 'STOCK', context)
-                print(f"{code}未成已撤，数量{order.m_nVolumeTotal}，orderId: {order.m_strOrderSysID}")
-            
-                # 重新委托剩余的量
-                try:
-                    pos = [x for x in positions if self.codeOfPosition(x) == code]
-                    if len(pos) > 0:
-                        posMount = pos[0].m_dMarketValue
-                    else:
-                        posMount = 0
-                except ZeroDivisionError as e:
-                    posMount = 0
-                print(f"{code}持仓数量：", posMount)
-                # 剩余金额 = 委托量 - 目前持仓金额
-                leftMount = g.buyValue - posMount
-                leftMoney = self.get_account_money(context)
-                newId = str(uuid.uuid4())
-                print(f"{code}重新委托，金额{leftMount}， 剩余可用金额{leftMoney}")
-                passorder(23, 1102, context.account, code, 5, -1, leftMount, newId, 1, newId, context)
-                g.orderIdMap[code] = newId
-        # 循环调用自身
-        self.loopCheckBuyListStatus(context, num + 1)
-
     def close_position(self, context, stock: Any) -> bool:
         """
         平仓操作：尽可能将指定股票仓位全部卖出
@@ -909,7 +930,7 @@ class TradingStrategy:
                 order_target_value(stock, 0, context, context.account)
             else:
                 # 1123 表示可用股票数量下单，这里表示全卖
-                # TODO 这里需要实盘验证下传参是否正确，因为1123模式下表示可用，所以传1表示全卖？
+                # 这里实盘已经验证传参正确，因为1123模式下表示可用比例，所以传1表示全卖
                 passorder(24, 1123, context.account, stock, 6, 1, 1, "卖出策略", 1, "", context)
             return True
 
@@ -928,12 +949,12 @@ class TradingStrategy:
 
         参数:
             context: 聚宽平台传入的交易上下文对象
-            target_list: 目标股票代码列表
+            target_list: 要买的股票代码列表
         """
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
-        self.hold_list = [self.codeOfPosition(position) for position in self.positions]
+        self.hold_list = [self.codeOfPosition(position) for position in self.positions if position.m_dMarketValue > 10000]
 
-        position_count = len(self.positions)
+        position_count = len(self.hold_list)
         target_num = len(target_list)
         print("下单逻辑: 持仓数: ", position_count, "目标数",  target_num)
         if target_num > position_count:
@@ -961,12 +982,31 @@ class TradingStrategy:
                         buy_num += 1
                         if buy_num == target_num - position_count:
                             break
-                    # 下单后，轮训检测状态
-                    self.loopCheckBuyListStatus(context)
             except ZeroDivisionError as e:
                 print(f"资金分摊时除零错误: {e}")
                 return
         print("买入委托完毕.")
+        
+    
+    def new_buy_target(self, context: Any):
+        """
+        新的买入目标：根据当前持仓和目标股票列表，计算新的买入目标股票列表
+
+        参数:
+            context: 聚宽平台传入的交易上下文对象
+        """
+        target_num = len(self.stocks_to_buy)
+        if target_num == 0:
+            return
+        value = round(1 /target_num, 2) - 0.005 # 留资金buffer 防止资金不足下单失败                   
+        money = self.get_account_money(context)
+        print("新的买入目标：", self.stocks_to_buy, "单支买入：", value)
+        # # 单支股票需要的买入金额
+        single_mount = round(money * value, 2)
+        for stock in self.stocks_to_buy:
+            self.open_position(context, stock, single_mount)
+
+    
     def today_is_between(self, context: Any) -> bool:
         """
         判断当前日期是否为资金再平衡（空仓）日，通常在04月或01月期间执行空仓操作
@@ -1027,7 +1067,7 @@ class TradingStrategy:
             for position in self.positions:
                 cost: float = position.m_dOpenPrice
                 price: float = position.m_dLastPrice
-                ret: float = 100 * (price / cost - 1)
+                ret: float = 100 * (price / cost - 1) if cost != 0 else 0.0  # 避免除以零错误
                 value: float = position.m_dMarketValue
                 amount: int = position.m_nVolume
                 code = self.codeOfPosition(position)
@@ -1045,15 +1085,11 @@ class TradingStrategy:
         else:
             print("**********没有持仓信息**********")
             messager.sendMsg("持仓状态：空仓")
-
-    
-    def account_callback(self, context, accountInfo):
-        print(accountInfo)
-        context.accountInfo = accountInfo
-        return accountInfo
+            messager.send_account_info(context)
 
 # 创建全局策略实例，策略入口处使用该实例
 strategy = TradingStrategy()
+
 
 # 全局包装函数，必须为顶层函数，保证调度任务可序列化，不使用 lambda
 
@@ -1121,7 +1157,6 @@ def trade_afternoon_func(context: Any) -> None:
     print('下午交易阶段...')
     strategy.trade_afternoon(context)
 
-
 def close_account_func(context: Any) -> None:
     """
     包装调用策略实例的 close_account 方法
@@ -1141,6 +1176,15 @@ def print_position_info_func(context: Any) -> None:
         context: 聚宽平台传入的交易上下文对象
     """
     strategy.print_position_info(context)
+    
+def log_target_list_info(context: Any) -> None:
+    """
+    打印目标股票池信息
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    strategy.internal_get_target_list(context)
 
 class ScheduledTask:
     """定时任务基类"""
@@ -1245,17 +1289,22 @@ def testRunBuy(context):
     print("执行买入逻辑")
     weekly_adjustment_buy_func(context)
 
-
 def init(context: Any) -> None:
     # 初始化策略环境及参数
     strategy.initialize(context)
     context.runner = TaskRunner(context)
-
+    messager.set_is_test(context.do_back_test)
     # 调试代码，实盘调试，慎用！！！！
     # testRunBuy(context)
 
     # 注册调度任务，所有任务均使用顶层包装函数（不使用 lambda 以确保可序列化）
     
+    # 判断当前日期是否为周末，如果是则直接返回
+    current_weekday = datetime.now().weekday()
+    if current_weekday >= 5:  # 5表示周六，6表示周日
+        print('当前日期为周末，不执行任务')
+        return
+
     # 实盘和回测不一样的地方在于，可以使用run_time函数，不需要等到盘中才执行定时逻辑，因此部分逻辑执行时间可以前置
     if context.do_back_test:
         # -------------------每日执行任务 --------------------------------
@@ -1265,6 +1314,7 @@ def init(context: Any) -> None:
         context.runner.run_daily("9:40", prepare_stock_list_func)
         # 10:00 am 止盈止损检测
         context.runner.run_daily("10:00", sell_stocks_func)
+        
         # 14:30 pm 检查需要卖出的持仓
         context.runner.run_daily("14:30", trade_afternoon_func)
         # 14:50 pm 检查当日是否需要一键清仓
@@ -1279,22 +1329,25 @@ def init(context: Any) -> None:
     else:
         # -------------------每日执行任务 --------------------------------
         # 9am 检查昨日持仓
-        context.run_time("check_holdings_yesterday_func","1nDay","2025-03-0109:15:00","SH")
+        context.run_time("check_holdings_yesterday_func","1nDay","2025-03-01 09:15:00","SH")
         # 9:05am 准备股票列表
-        context.run_time("prepare_stock_list_func","1nDay","2025-03-0109:20:00","SH")
+        context.run_time("prepare_stock_list_func","1nDay","2025-03-01 09:20:00","SH")
         # 9:30 am 止盈止损检测
-        context.run_time("sell_stocks_func","1nDay","2025-03-0109:30:00","SH")
+        context.run_time("sell_stocks_func","1nDay","2025-03-01 09:30:00","SH")
         # 14:30 pm 检查涨停破板，需要卖出的持仓
-        context.run_time("trade_afternoon_func","1nDay","2025-03-0114:30:00","SH")
+        context.run_time("trade_afternoon_func","1nDay","2025-03-01 14:30:00","SH")
         # 14:50 pm 检查当日是否到达空仓日，需要一键清仓
-        context.run_time("close_account_func","1nDay","2025-03-0114:50:00","SH")
+        context.run_time("close_account_func","1nDay","2025-03-01 14:50:00","SH")
         # 15:05 pm 每日收盘后打印一次持仓
-        context.run_time("print_position_info_func","1nDay","2025-03-0115:05:00","SH")
+        context.run_time("print_position_info_func","1nDay","2025-03-01 15:05:00","SH")
+        # 15:10 pm 每日收盘后打印一次候选股票池
+        context.run_time("log_target_list_info","1nDay","2025-03-01 15:10:00","SH")
+        
         # -------------------每周执行任务 --------------------------------
         # 09:40 am 每周做一次调仓动作，尽量早，流动性充足
-        context.run_time("weekly_adjustment_func","7nDay","2025-03-1909:40:00","SH")
+        context.run_time("weekly_adjustment_func","7nDay","2025-05-08 09:40:00","SH")
         # 09:50 am 每周调仓后买入股票
-        context.run_time("weekly_adjustment_buy_func","7nDay","2025-03-1909:50:00","SH")
+        context.run_time("weekly_adjustment_buy_func","7nDay","2025-05-08 09:50:00","SH")
 
 
 def checkTask(context):
@@ -1303,11 +1356,17 @@ def checkTask(context):
 # 在handlebar函数中调用（假设当前K线时间戳为dt）
 def handlebar(context):
     # 新增属性，快捷获取当前日期
+    
     index = context.barpos
     currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
-    context.currentTime = currentTime
-    context.today = pd.to_datetime(currentTime, unit='ms')
-
+    try:
+        # 第一根k的时间是昨天，所以这里做下判断，只对增量更新
+        if context.currentTime < currentTime:
+            context.currentTime = currentTime
+            context.today = pd.to_datetime(currentTime, unit='ms')
+    except Exception as e:
+        print('handlebar异常', currentTime, e)
+        
     if (datetime.now() - timedelta(days=1) > context.today) and not context.do_back_test:
         # print('非回测模式，历史不处理')
         return
@@ -1321,23 +1380,19 @@ def handlebar(context):
 def deal_callback(context, dealInfo):
     stock = dealInfo.m_strInstrumentName
     value = dealInfo.m_dTradeAmount
-    print(f"已买入股票 {stock}，成交额 {value:.2f}")
+    print(f"已{dealInfo.m_nDirection}股票 {stock}，成交额 {value:.2f}")
     strategy.not_buy_again.append(stock)
-    messager.sendLog(f"已买入股票 {stock}，成交额 {value:.2f}")    
+    # messager.sendLog(f"{stock} 已成交，成交额 {value:.2f}")    
     # 回测模式不发
-    messager.send_deal(dealInfo)
+    # messager.send_deal(dealInfo)
     
 
-def position_callback(context, positionInfo):
-    print("持仓信息变更回调", context.get_stock_name(strategy.codeOfPosition(positionInfo)))
-    messager.sendLog("持仓信息变更回调" + context.get_stock_name(strategy.codeOfPosition(positionInfo)))
-    
 def orderError_callback(context, orderArgs, errMsg):
     messager.sendLog(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
     
 def order_callback(context, orderInfo):
     print("委托信息变更回调", context.get_stock_name(strategy.codeOfPosition(orderInfo)))
-    messager.sendLog(f"委托状态变化回调" + context.get_stock_name(strategy.codeOfPosition(orderInfo)))
+    messager.sendLog(f"已委托： " + context.get_stock_name(strategy.codeOfPosition(orderInfo)))
     
 
 
