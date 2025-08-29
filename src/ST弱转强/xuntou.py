@@ -14,6 +14,7 @@ g = G()
 g.stock_num = 4
 g.max_mount = 150000 # 最大单票买入额，防止账户资金被超买
 
+g.black_list = ['600200']  #黑名单股票代码，在其中的过滤掉
 
 # 配置列表（注意不要删除，注释掉改为自己的就好）
 # 学鸿的账户
@@ -109,6 +110,9 @@ def prepare(ContextInfo):
         print("未获取到沪深A股股票列表")
         return
         
+    # 过滤黑名单股票（支持包含匹配）
+    allStocks = [stock for stock in allStocks if not any(black_stock in stock for black_stock in g.black_list)]
+    
     ContextInfo.set_universe(allStocks)
     
     # 筛选ST
