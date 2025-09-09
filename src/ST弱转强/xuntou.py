@@ -731,7 +731,7 @@ def buy(ContextInfo):
         messager.send_message(f"买入目标：{[ContextInfo.get_stock_name(stock) for stock in target]}, 单支买入金额：{single_mount}")
         for stock in target:
             if ContextInfo.do_back_test:
-                open_position_in_test(ContextInfo, stock, round(1 / g.stock_num, 2) - 0.01)
+                open_position_in_test(ContextInfo, stock, round(1 / g.stock_num, 2) - 0.03)
             else:
                 open_position(ContextInfo, stock, single_mount)
 
