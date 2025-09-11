@@ -29,6 +29,8 @@ g = G()
 g.orderIdMap = {}
 g.buyValue = 0
 g.today_HL_remove_list = []
+# 缓存的文件地址，桌面上的cache_list.txt
+g.cache_file = 'stock_list_cache.txt'
 
 def is_trading():
     current_time = datetime.now().time()
@@ -451,7 +453,7 @@ class TradingStrategy:
         self.log_target_list(context, context.cache_target_list)
         
 
-    def get_stock_list(self, context: Any) -> List[str]:
+    def get_stock_list(self, context: Any, fromCache: bool = False) -> List[str]:
         """
         选股模块：
         1. 从指定股票池（如 399101.XSHE 指数成分股）中获取初步股票列表；
@@ -461,6 +463,21 @@ class TradingStrategy:
         返回:
             筛选后的候选股票代码列表
         """
+        cache_file = g.cache_file
+
+        if fromCache:
+            try:
+                with open(cache_file, 'r') as f:
+                    stock_list = [line.strip() for line in f.readlines() if line.strip()]
+                if stock_list:
+                    print(f"成功从缓存文件 {cache_file} 读取 stock_list")
+                    return stock_list
+                else:
+                    print(f"缓存文件 {cache_file} 为空，将重新获取")
+            except FileNotFoundError:
+                print(f"未找到缓存文件 {cache_file}，将重新获取")
+
+        # fromCache is False or cache is not available
         print('开始每周选股环节 =====================>')
         # 从指定指数中获取初步股票列表
         initial_list = self.filter_stock_by_gjt(context)
@@ -484,12 +501,20 @@ class TradingStrategy:
 
         print(f"候选股票{len(final_list)}只: {final_list}")
 
+        try:
+            with open(cache_file, 'w') as f:
+                for stock in final_list:
+                    f.write(f"{stock}\n")
+            print(f"已将 stock_list 写入缓存文件 {cache_file}")
+        except Exception as e:
+            print(f"写入缓存文件 {cache_file} 失败: {e}")
+
         return final_list
     
     def find_target_stock_list(self, context):
-        self.target_list = self.get_stock_list(context)        
+        self.target_list = self.get_stock_list(context, fromCache=True)        
         target_list: List[str] = self.target_list[:self.stock_num]
-        print('今日股票池:', target_list)
+        print('今日股票池(缓存中读取):', target_list)
         for code in target_list:
             print(context.get_stock_name(code))
 
@@ -519,6 +544,7 @@ class TradingStrategy:
         self.hold_list = [self.codeOfPosition(position) for position in self.positions if position.m_dMarketValue > 10000]
         print(self.no_trading_today_signal, '禁止交易信号')
         if not self.no_trading_today_signal:
+            messager.send_message("开始每周调仓")
             self.target_list = self.get_stock_list(context)
             # 取目标持仓数以内的股票作为调仓目标
             target_list: List[str] = self.target_list[:self.stock_num]
@@ -1085,6 +1111,7 @@ def prepare_stock_list_func(context: Any) -> None:
     """
     print('准备当日股票...')
     strategy.prepare_stock_list(context)
+    strategy.find_target_stock_list(context)
 
 
 

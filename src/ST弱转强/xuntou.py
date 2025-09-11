@@ -699,14 +699,16 @@ def buy(ContextInfo):
             day_close = ticksOfDay[stock]["close"].iloc[-2]
             # 昨日成交量
             no_volume = ticksOfDay[stock]["volume"].iloc[-2] == 0
+            # 今日停牌状态
+            suspendFlag = ticksOfDay[stock]["suspendFlag"].iloc[-1] == 1
 
             # print('开盘时竞价数据查看', ContextInfo.get_stock_name(stock), ticksOfDay[stock])
             # 计算价格波动比例
             price_ratio = round(tick_price / day_close, 4)
             print('竞价表现', ContextInfo.get_stock_name(stock), stock,  '开盘价：', tick_price, '昨日收盘价：', day_close, price_ratio, no_volume)
 
-            # 执行筛选条件 高开1.5点以内, 低开5个点以内
-            if 0.951 < price_ratio < 1.015 and not no_volume:
+            # 执行筛选条件 高开1.5点以内, 低开5个点以内，且当天未停牌
+            if 0.951 < price_ratio < 1.015 and not no_volume and not suspendFlag:
                 target.append(stock)
                 
         except KeyError as e:
