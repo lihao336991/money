@@ -204,16 +204,17 @@ class TradingStrategy:
         参数:
             context: 聚宽平台传入的交易上下文对象
         """
-        
-        currentTime = nativeTime.time() * 1000 + 8 * 3600 * 1000
-        print('当前时间', currentTime)
-        context.currentTime = currentTime
-        context.today = pd.to_datetime(currentTime, unit='ms')
-
         # 注意：调度任务由全局包装函数统一注册，避免 lambda 导致序列化问题
         context.account = MY_ACCOUNT
         context.set_account(context.account)
         context.accountType = ""
+        
+        if context.do_back_test:
+            return
+        currentTime = nativeTime.time() * 1000 + 8 * 3600 * 1000
+        print('当前时间', currentTime)
+        context.currentTime = currentTime
+        context.today = pd.to_datetime(currentTime, unit='ms')
 
     # 根据股票代码和收盘价，计算次日涨跌停价格
     def get_limit_of_stock(self, stock_code, last_close):
@@ -1370,22 +1371,24 @@ def handlebar(context):
     index = context.barpos
     currentTime = context.get_bar_timetag(index) + 8 * 3600 * 1000
     try:
-        # 第一根k的时间是昨天，所以这里做下判断，只对增量更新
-        if context.currentTime < currentTime:
-            context.currentTime = currentTime
+        # 实盘
+        if not context.do_back_test:
+            # 第一根k的时间是昨天，所以这里做下判断，只对增量更新
+            if context.currentTime < currentTime:
+                context.currentTime = currentTime
+                context.today = pd.to_datetime(currentTime, unit='ms')
+        # 回测
+        else:
             context.today = pd.to_datetime(currentTime, unit='ms')
+            context.currentTime = currentTime
+            # 检查并执行任务
+            context.runner.check_tasks(context.today)
+
+            if not strategy.pool_initialized:
+                strategy.get_stock_pool_when_test(context)
     except Exception as e:
         print('handlebar异常', currentTime, e)
         
-    if (datetime.now() - timedelta(days=1) > context.today) and not context.do_back_test:
-        # print('非回测模式，历史不处理')
-        return
-    else:
-        # 检查并执行任务
-        context.runner.check_tasks(context.today)
-
-        if not strategy.pool_initialized:
-            strategy.get_stock_pool_when_test(context)
 
 def deal_callback(context, dealInfo):
     stock = dealInfo.m_strInstrumentName
