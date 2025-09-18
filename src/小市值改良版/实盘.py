@@ -544,7 +544,7 @@ class TradingStrategy:
         self.hold_list = [self.codeOfPosition(position) for position in self.positions if position.m_dMarketValue > 10000]
         print(self.no_trading_today_signal, '禁止交易信号')
         if not self.no_trading_today_signal:
-            messager.send_message("开始每周调仓")
+            messager.sendLog("开始每周调仓")
             self.target_list = self.get_stock_list(context)
             # 取目标持仓数以内的股票作为调仓目标
             target_list: List[str] = self.target_list[:self.stock_num]

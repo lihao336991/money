@@ -724,10 +724,10 @@ def buy(ContextInfo):
     if len(target) > 0:
         # 剩余份数
         leftNum = g.stock_num - len(hold_list)
-        buyPercent = round(1 / leftNum, 2) - 0.001
+        buyPercent = round(1 / leftNum, 2) - 0.003
         money = get_account_money(ContextInfo)
         # 单支股票需要的买入金额
-        single_mount = round(money * buyPercent, 2)
+        single_mount = round(money * buyPercent, 2) - 100
         single_mount = min(single_mount, g.max_mount)
         print(ContextInfo.today, "买入目标：", target,  [ContextInfo.get_stock_name(stock) for stock in target], "单支买入剩余比例：", buyPercent, "金额：", single_mount)
         messager.send_message(f"买入目标：{[ContextInfo.get_stock_name(stock) for stock in target]}, 单支买入金额：{single_mount}")
