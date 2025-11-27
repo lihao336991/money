@@ -1,4 +1,4 @@
-#coding:gbk
+#encoding:gbk
 import pandas as pd
 import numpy as np
 import math
@@ -119,7 +119,7 @@ class TaskRunner:
             if task_obj.should_trigger(current_dt):
                 func_to_run = globals().get(task_info['func'])
                 if func_to_run:
-                    print(f"【任务执行】触发任务: {task_info['func']} @ {current_dt.strftime('%H:%M:%S')}")
+                    print(f"【任务执行】触发任务: {task_info['func']} @ {current_dt.strftime('%Y-%m-%d %H:%M:%S')}")
                     try:
                         func_to_run(self.C)
                         task_obj.last_executed_date = current_dt.date()
@@ -144,7 +144,7 @@ def get_shifted_date(C, date_str, days, days_type='T'):
             start_date = (base_date - timedelta(days=365)).strftime("%Y%m%d")
             end_date = (base_date + timedelta(days=abs(days) + 365)).strftime("%Y%m%d")
             
-            trade_days = C.get_trading_dates(stockcode='SH', start_date=start_date, end_date=end_date)
+            trade_days = C.get_trading_dates(stockcode='SH', start_date=start_date, end_date=end_date, count=1000, period='1d')
             
             if not trade_days:
                 return (base_date + timedelta(days=days)).strftime("%Y%m%d")
@@ -171,24 +171,6 @@ def get_previous_trading_day(C, current_date):
     prev_str = get_shifted_date(C, current_str, -1, 'T')
     return datetime.strptime(prev_str, "%Y%m%d").date()
 
-# ====================================================================
-# 【交易辅助函数】(模拟平台接口，以确保兼容性)
-# ====================================================================
-
-def get_trade_detail_data(account, asset_type, data_type):
-    # 实际应调用平台 SDK，这里返回模拟数据
-    # 为方便演示，这里直接使用 C.get_all_positions() 和 C.get_all_orders()
-    if data_type == 'position':
-        # 实际应返回 Position 对象列表
-        return C.get_all_positions() 
-    elif data_type == 'account':
-        # 实际应返回 Account 对象列表
-        return C.get_account_info()
-    elif data_type == 'order':
-        # 实际应返回 Order 对象列表
-        return C.get_all_orders()
-    return []
-
 def codeOfPosition(position):
     # 模拟 ST 策略中的持仓代码格式
     return position.m_strInstrumentID + '.' + position.m_strExchangeID
@@ -197,36 +179,39 @@ def passorder_live(C, op_type, code, price, volume, remark):
     """实盘交易下单函数，使用 ST 策略的 passorder 风格"""
     # 假设 23=买入, 24=卖出, 7=限价，5=最新价
     if op_type == 23: # 买入
-        C.passorder(23, 1101, C.account_id, code, 7, price, volume, remark)
+        passorder(23, 1101, C.account_id, code, 7, price, volume, remark)
     elif op_type == 24: # 卖出
-        C.passorder(24, 1101, C.account_id, code, 7, price, volume, remark)
+        passorder(24, 1101, C.account_id, code, 7, price, volume, remark)
     print(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.2f}, 数量: {volume}")
 
 def order_target_value_test(C, code, target_value):
     """回测模式下按市值调仓 (ST 策略的 order_target_value 风格)"""
     print(f"【回测交易】{code} 调仓目标市值: {target_value:.2f}")
     # 在实际回测平台中，应调用 C.order_target_value(code, target_value)
+    order_target_value(code, target_value, C, C.account_id)
 
 def cancel(order_id, account, asset_type):
     """撤单函数"""
     print(f"【交易操作】撤销订单: {order_id}")
-    # 在实际平台中，应调用 C.cancel_order(order_id, account, asset_type)
+    cancel_order(order_id, account, asset_type)
 
-def get_total_asset(C):
-    account_info = C.get_account_info()
-    if account_info:
-        return account_info.m_dTotalAsset # 假设平台返回AccountInfo对象
-    return 0
+# 获取当前账户可用金额
+def get_total_asset(C):        
+    accounts = get_trade_detail_data(C.account_id, 'stock', 'account')
+    money = 0
+    for dt in accounts:
+        money = dt.m_dBalance
+    return money
 
 # ====================================================================
 # 【核心策略逻辑】
 # ====================================================================
+Period = '1d'
 
 def init(C):
     # ---------------- 配置区域 ----------------
     C.account_id = ACCOUNT 
     C.set_account(C.account_id)
-    C.period = '1d'
     # ----------------------------------------
 
     # 注册任务调度器和消息推送
@@ -311,6 +296,8 @@ def execute_sell_logic(C):
     # 2. 计算目标持仓金额
     target_positions = {}
     total_asset = get_total_asset(C)
+
+    print(f"当前账户总金额: {total_asset:.2f}")
     
     if total_asset > 0 and target_list:
         per_value = total_asset / len(target_list)
@@ -321,9 +308,17 @@ def execute_sell_logic(C):
     
     # 3. 执行卖出操作
     positions = get_trade_detail_data(C.account_id, 'stock', 'position')
-    current_holdings = {obj.m_strInstrumentID + '.' + obj.m_strExchangeID: obj for obj in positions}
+    hold_list = [codeOfPosition(position) for position in positions if position.m_dMarketValue > 10000]
+    print("当前有仓位的持仓:", hold_list)
     
+    current_holdings = {obj.m_strInstrumentID + '.' + obj.m_strExchangeID: obj for obj in positions}
+    # 如果已经持仓，且持仓比例不小于目标持仓比例，不需要执行后续逻辑
+
     for code in list(current_holdings.keys()):
+        if code in target_list: 
+            print(f"{code} 继续持仓")
+            continue
+
         pos_obj = current_holdings[code]
         price = get_safe_price(C, code)
         if price <= 0 or pos_obj.m_nCanUseVolume <= 0: continue
@@ -414,13 +409,14 @@ def log_position(C):
     """【健壮性模块 1 延伸：收盘持仓日志】(移植自您的 ST 策略)"""
     positions = get_trade_detail_data(C.account_id, 'STOCK', 'POSITION')
     if positions:
-        print(f"\n********** 收盘持仓信息打印开始 **********")
+        print(f"********** 收盘持仓信息打印开始 **********")
         msg = f"【收盘持仓】日期: {C.today.strftime('%Y-%m-%d')}\n"
         for position in positions:
             cost: float = position.m_dOpenPrice
             price: float = position.m_dLastPrice
+            value: float = position.m_dMarketValue
             ret: float = 100 * (price / cost - 1) if cost != 0 else 0.0
-            msg += f"- {codeOfPosition(position)} ({C.get_stock_name(codeOfPosition(position))}), 盈亏: {ret:.2f}%\n"
+            msg += f"- {codeOfPosition(position)} ({C.get_stock_name(codeOfPosition(position))}), 市值：{value:.2f}，盈亏: {ret:.2f}%\n"
         print(msg)
         messager.send_message(msg)
         print("****************************************")
@@ -429,7 +425,7 @@ def log_position(C):
 
 def get_safe_price(C, code):
     if C.do_back_test:
-        data = C.get_market_data_ex(['close'], [code], period=C.period, count=1, subscribe=False)
+        data = C.get_market_data_ex(['close'], [code], period=Period, count=1, subscribe=False)
         if code in data and not data[code].empty:
             return data[code].iloc[-1]['close']
         return 0
@@ -439,7 +435,7 @@ def get_safe_price(C, code):
             # 兼容 ST 策略中的实盘价格获取逻辑
             return tick[code].get('lastPrice', 0)
         else:
-            data = C.get_market_data_ex(['close'], [code], period=C.period, count=1, subscribe=False)
+            data = C.get_market_data_ex(['close'], [code], period=Period, count=1, subscribe=False)
             if code in data and not data[code].empty:
                 return data[code].iloc[-1]['close']
             return 0
@@ -447,19 +443,19 @@ def get_safe_price(C, code):
 def filter_etf(C):
     scores = []
     # 增加额外缓冲天数，确保计算 RSRS 时数据完整
-    history_data = C.get_market_data_ex(['close'], C.etf_pool, period=C.period, count=C.m_days + 5, subscribe=False)
+    history_data = C.get_market_data_ex(['close'], C.etf_pool, period=Period, count=g.m_days + 5, subscribe=False)
     for etf in C.etf_pool:
         if etf not in history_data: continue
         df = history_data[etf]
-        if len(df) < C.m_days: continue
+        if len(df) < g.m_days: continue
         
         if not C.do_back_test:
             current_price = get_safe_price(C, etf)
             if current_price <= 0: continue
-            closes = df['close'].values[-C.m_days:] 
+            closes = df['close'].values[-g.m_days:] 
             prices = np.append(closes, current_price)
         else:
-            prices = df['close'].values[-(C.m_days + 1):]
+            prices = df['close'].values[-(g.m_days + 1):]
 
         if len(prices) < 2: continue
 
