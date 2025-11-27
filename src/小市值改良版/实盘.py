@@ -513,7 +513,7 @@ class TradingStrategy:
         return final_list
     
     def find_target_stock_list(self, context):
-        self.target_list = self.get_stock_list(context, fromCache=True)        
+        self.target_list = self.get_stock_list(context, fromCache=False)        
         target_list: List[str] = self.target_list[:self.stock_num]
         print('今日股票池(缓存中读取):', target_list)
         for code in target_list:
@@ -1312,7 +1312,7 @@ def init(context: Any) -> None:
     
     # 判断当前日期是否为周末，如果是则直接返回
     current_weekday = datetime.now().weekday()
-    if current_weekday >= 5:  # 5表示周六，6表示周日
+    if current_weekday >= 5 and not context.do_back_test:  # 5表示周六，6表示周日
         print('当前日期为周末，不执行任务')
         return
 
