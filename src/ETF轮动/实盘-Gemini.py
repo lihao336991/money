@@ -443,7 +443,9 @@ def get_safe_price(C, code):
 def filter_etf(C):
     scores = []
     # 增加额外缓冲天数，确保计算 RSRS 时数据完整
+    # 回测时需要指定时间，否则一直使用当前真实时间
     history_data = C.get_market_data_ex(['close'], C.etf_pool, period=Period, count=g.m_days + 5, subscribe=False)
+    # print('排查所有数据', history_data)
     for etf in C.etf_pool:
         if etf not in history_data: continue
         df = history_data[etf]

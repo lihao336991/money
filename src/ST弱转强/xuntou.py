@@ -58,7 +58,7 @@ def init(ContextInfo):
         print('doing test')
         ContextInfo.runner.run_daily("9:25", prepare)
         ContextInfo.runner.run_daily("9:31", buy)
-        ContextInfo.runner.run_daily("13:00", sell)
+        ContextInfo.runner.run_daily("11:29", sell)
         ContextInfo.runner.run_daily("14:00", sell)
         ContextInfo.runner.run_daily("14:55", sell)
         ContextInfo.runner.run_daily("15:00", log_position)
@@ -67,7 +67,7 @@ def init(ContextInfo):
         ContextInfo.run_time("prepare","1nDay","2025-08-01 09:20:20","SH")
         # 集合竞价后就尝试下单，最新价是否就是集合竞价收盘价？
         ContextInfo.run_time("buy","1nDay","2025-08-01 09:26:10","SH")
-        ContextInfo.run_time("sell","1nDay","2025-08-01 13:00:00","SH")
+        ContextInfo.run_time("sell","1nDay","2025-08-01 11:29:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:00:00","SH")
         ContextInfo.run_time("sell","1nDay","2025-08-01 14:55:00","SH")
 
