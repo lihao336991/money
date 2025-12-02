@@ -221,7 +221,7 @@ def init(C):
     # 注册任务调度器和消息推送
     C.runner = TaskRunner(C)
     messager.set_is_test(C.do_back_test)
-    print('回测模式:', C.do_back_test)
+    print(f"当前运行模式: {'回测' if C.do_back_test else '实盘'}")
     
     # 初始化时间戳
     C.currentTime = 0
@@ -248,14 +248,14 @@ def init(C):
         # 回测中使用 TaskRunner 的精确时间模拟
         C.runner.run_daily("11:00", execute_sell_logic)
         C.runner.run_daily("11:05", execute_buy_logic)
-        C.runner.run_daily("15:00", log_position)
+        C.runner.run_daily("15:05", log_position)
         
     else:
         print('doing live - 注册实盘任务')
         # 实盘中使用平台 run_time 接口
-        C.run_time("execute_sell_logic", "1d", "11:00:00")
-        C.run_time("execute_buy_logic", "1d", "11:05:00")
-        C.run_time("log_position", "1d", "15:00:00")
+        C.run_time("execute_sell_logic","1nDay","2025-12-01 11:00:00","SH")
+        C.run_time("execute_buy_logic","1nDay","2025-12-01 11:05:00","SH")
+        C.run_time("log_position","1nDay","2025-12-01 15:00:00","SH")
 
     print("策略初始化完成，已设置为分步调仓模式")
 
