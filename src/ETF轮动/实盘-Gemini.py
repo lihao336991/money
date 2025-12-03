@@ -183,9 +183,10 @@ def passorder_live(C, op_type, code, price, volume, remark):
     """实盘交易下单函数，使用 ST 策略的 passorder 风格"""
     # 假设 23=买入, 24=卖出, 7=限价，5=最新价
     if op_type == 23: # 买入
-        passorder(23, 1101, C.account_id, code, 7, price, volume, remark)
+        passorder(23, 1101, C.account_id, code, 7, price, volume, remark, C)
+        
     elif op_type == 24: # 卖出
-        passorder(24, 1101, C.account_id, code, 7, price, volume, remark)
+        passorder(24, 1101, C.account_id, code, 7, price, volume, remark, C)
     print(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.2f}, 数量: {volume}")
 
 def order_target_value_test(C, code, target_value):
@@ -360,7 +361,7 @@ def execute_buy_logic(C):
     
     target_positions = C.today_target_positions
     if not target_positions:
-        print("今日无买入目标")
+        messager.send_message("今日无买入目标")
         return
 
     # 实盘中先撤单 (确保资金不会被占用)
