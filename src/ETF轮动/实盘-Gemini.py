@@ -23,7 +23,9 @@ g.min_money = 500
 # 模拟账号
 # ACCOUNT = '620000204906'
 # 李慕凡 实盘
-ACCOUNT = '170100005993'
+# ACCOUNT = '170100005993'
+# 李浩的实盘
+ACCOUNT = '190200026196'
 
 HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=599439e6-4132-48b6-a05a-c1fbb32e33d8'
 
