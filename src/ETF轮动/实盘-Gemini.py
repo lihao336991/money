@@ -257,7 +257,7 @@ def init(C):
         print('doing live - 注册实盘任务')
         # 实盘中使用平台 run_time 接口
         C.run_time("execute_sell_logic","1nDay","2025-12-01 11:00:00","SH")
-        C.run_time("execute_buy_logic","1nDay","2025-12-01 11:05:00","SH")
+        C.run_time("execute_buy_logic","1nDay","2025-12-01 13:05:00","SH")
         C.run_time("log_position","1nDay","2025-12-01 15:00:00","SH")
 
     print("策略初始化完成，已设置为分步调仓模式")
@@ -449,23 +449,55 @@ def get_safe_price(C, code):
 
 def filter_etf(C):
     scores = []
-    # 增加额外缓冲天数，确保计算 RSRS 时数据完整
-    # 回测时需要指定时间，否则一直使用当前真实时间
     
-    current_dt = datetime.fromtimestamp(C.currentTime / 1000)
+    # 【修复点1：区分实盘与回测时间】
+    if C.do_back_test:
+        current_dt = datetime.fromtimestamp(C.currentTime / 1000)
+    else:
+        current_dt = datetime.now() # 实盘直接取系统时间
+
     yesterday_dt = get_previous_trading_day(C, current_dt.date())
     yesterday = yesterday_dt.strftime("%Y%m%d")
 
-    history_data = C.get_market_data_ex(['close'], C.etf_pool, period=Period, start_time='', end_time=yesterday, count=g.m_days + 5, subscribe=False)
-    # print('排查所有数据', history_data)
+    # 【关键日志 1：排查日期是否正确】
+    # 如果这里打印的是 1970年，说明时间获取逻辑依然有误；如果是昨天日期，说明正常。
+    print(f"【排查日志-1】计算基准日: {current_dt.strftime('%Y-%m-%d')}，取数截止日: {yesterday}")
+
+    history_data = C.get_market_data_ex(
+        ['close'], 
+        C.etf_pool, 
+        period=Period, 
+        start_time='', 
+        end_time=yesterday, 
+        count=g.m_days + 10, 
+        subscribe=False
+    )
+    
+    # 【关键日志 2：排查数据是否获取成功】
+    # 如果是 0/18，说明行情连接断了或者没订阅成功；如果正常应该是 18/18。
+    print(f"【排查日志-2】成功获取历史数据: {len(history_data)} / {len(C.etf_pool)} 只")
+
     for etf in C.etf_pool:
-        if etf not in history_data: continue
+        if etf not in history_data: 
+            # 只有实盘打印缺失的，防止回测刷屏
+            if not C.do_back_test: print(f"  > 警告: {etf} 返回数据为空")
+            continue
+            
         df = history_data[etf]
-        if len(df) < g.m_days: continue
         
+        # 数据长度校验
+        if len(df) < g.m_days: 
+            if not C.do_back_test: print(f"  > 忽略: {etf} 数据不足 (只有 {len(df)} 行)")
+            continue
+        
+        # 价格拼接
         if not C.do_back_test:
             current_price = get_safe_price(C, etf)
-            if current_price <= 0: continue
+            # 【关键日志 3：排查实时价格】
+            # 如果这里打印很多“价格无效”，说明实盘行情推送没跟上
+            if current_price <= 0: 
+                print(f"  > 忽略: {etf} 实时价格无效 ({current_price})")
+                continue
             closes = df['close'].values[-g.m_days:] 
             prices = np.append(closes, current_price)
         else:
@@ -473,9 +505,9 @@ def filter_etf(C):
 
         if len(prices) < 2: continue
 
+        # --- RSRS 计算 ---
         y = np.log(prices)
         x = np.arange(len(y))
-        # RSRS 动量计算
         weights = np.linspace(1, 2, len(y))
         slope, intercept = np.polyfit(x, y, 1, w=weights)
         annualized_returns = math.exp(slope * 250) - 1
@@ -485,18 +517,32 @@ def filter_etf(C):
         r2 = 1 - ss_res / ss_tot if ss_tot != 0 else 0
         score = annualized_returns * r2
 
-        # 暴跌过滤 (保留原逻辑)
+        # 暴跌过滤
         is_crash = False
         if len(prices) >= 4:
             if min(prices[-1]/prices[-2], prices[-2]/prices[-3], prices[-3]/prices[-4]) < 0.95:
                 is_crash = True
         
-        if is_crash: score = 0
+        if is_crash: 
+            # 仅在实盘打印暴跌过滤，方便确认是不是所有标的都被过滤了
+            if not C.do_back_test: print(f"  > 过滤: {etf} 触发暴跌保护")
+            score = 0
             
         if 0 < score < 6:
             scores.append({'code': etf, 'score': score})
             
     df_score = pd.DataFrame(scores)
-    if df_score.empty: return []
+    
+    # 【关键日志 4：排查最终评分结果】
+    # 如果这里 scores 也是空，说明数据都拿到了，但是都不满足 0 < score < 6
+    if df_score.empty: 
+        print("【排查日志-4】最终结果: 无标的入选 (有效评分列表为空)")
+        return []
+        
     df_score = df_score.sort_values(by='score', ascending=False)
-    return df_score['code'].head(g.stock_sum).tolist()
+    # 打印前3名看看分值是否正常
+    top_list = df_score.head(3).to_dict('records')
+    print(f"【排查日志-4】计算完成。Top3: {top_list}")
+    
+    final_list = df_score['code'].head(g.stock_sum).tolist()
+    return final_list
