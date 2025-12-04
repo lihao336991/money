@@ -257,7 +257,7 @@ def init(C):
         print('doing live - 注册实盘任务')
         # 实盘中使用平台 run_time 接口
         C.run_time("execute_sell_logic","1nDay","2025-12-01 11:00:00","SH")
-        C.run_time("execute_buy_logic","1nDay","2025-12-01 13:05:00","SH")
+        C.run_time("execute_buy_logic","1nDay","2025-12-01 11:05:00","SH")
         C.run_time("log_position","1nDay","2025-12-01 15:00:00","SH")
 
     print("策略初始化完成，已设置为分步调仓模式")
