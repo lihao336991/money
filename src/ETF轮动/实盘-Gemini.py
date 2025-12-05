@@ -74,64 +74,71 @@ messager = Messager(HOOK)
 
 class ScheduledTask:
     """定时任务基类"""
-    def __init__(self, execution_time, func_name):
-        self.last_executed_date = None
+    def __init__(self, execution_time):
+        self.last_executed = None
         self.execution_time = self._parse_time(execution_time)
-        self.func_name = func_name
     
     def _parse_time(self, time_str):
-        """将HH:MM或HH:MM:SS格式字符串转换为time对象"""
+        """将HH:MM格式字符串转换为time对象"""
         try:
-            parts = time_str.split(':')
-            hour = int(parts[0])
-            minute = int(parts[1])
-            second = int(parts[2]) if len(parts) > 2 else 0
-            return dt_time(hour, minute, second)
+            return datetime.strptime(time_str, "%H:%M").time()
         except ValueError:
-            raise ValueError(f"Invalid time format: {time_str}, use HH:MM or HH:MM:SS")
+            raise ValueError("Invalid time format, use HH:MM")
 
+# ===================== 以下为工具函数 ************************ 
 class DailyTask(ScheduledTask):
-    """每日任务，每天只执行一次"""
+    """每日任务"""
     def should_trigger(self, current_dt):
-        if self.last_executed_date is None:
-            # 确保在回测开始的第一天就能触发
-            self.last_executed_date = current_dt.date() - timedelta(days=1)
-        
-        time_check = current_dt.time() >= self.execution_time
-        date_check = current_dt.date() > self.last_executed_date
-        
-        return time_check and date_check
+        # 生成当日理论执行时间
+        should1 = current_dt.time() >= datetime.combine(current_dt.date(), self.execution_time).time()
+        should2 = self.last_executed != current_dt.date()
+        should = should1 and should2
+        # 当前时间已过执行时间 且 当日未执行
+        return should
 
 class TaskRunner:
-    """管理和执行定时任务"""
-    def __init__(self, C):
-        self.tasks = []
-        self.C = C
+    def __init__(self, context):
+        self.daily_tasks = []
+        self.weekly_tasks = []
+        self.context = context
 
-    def run_daily(self, time_str, func):
-        self.tasks.append({
-            'type': 'daily',
-            'time': time_str,
-            'func': func.__name__,
-            'task_obj': DailyTask(time_str, func.__name__)
-        })
-        print(f"【调度】已添加每日任务 {func.__name__} @ {time_str}")
+    def run_daily(self, time_str, task_func):
+        """注册每日任务
+        Args:
+            time_str: 触发时间 "HH:MM"
+            task_func: 任务函数
+        """
+        print(task_func, 'task_func')
+        self.daily_tasks.append( (DailyTask(time_str), task_func) )
+    
+    def run_weekly(self, weekday, time_str, task_func):
+        """注册每周任务
+        Args:
+            weekday: 0-6 代表周一到周日
+            time_str: 触发时间 "HH:MM"
+            task_func: 任务函数
+        """
+        self.weekly_tasks.append( (WeeklyTask(weekday, time_str), task_func) )
+    
+    def check_tasks(self, bar_time):
+        """在handlebar中调用检查任务
+        Args:
+            bar_time: K线结束时间(datetime对象)
+        """
+        # 处理每日任务
+        for task, func in self.daily_tasks:
+            if task.should_trigger(bar_time):
+                func(self.context)
+                task.last_executed = bar_time.date()
+        
+        # 处理每周任务
+        for task, func in self.weekly_tasks:
+            if task.should_trigger(bar_time):
+                func(self.context)
+                week_num = bar_time.isocalendar()[1]
+                task.last_executed = f"{bar_time.year}-{week_num}"  # (year, week)
 
-    def check_tasks(self, current_dt):
-        """检查并执行任务"""
-        for task_info in self.tasks:
-            task_obj = task_info['task_obj']
-            
-            if task_obj.should_trigger(current_dt):
-                func_to_run = globals().get(task_info['func'])
-                if func_to_run:
-                    print(f"【任务执行】触发任务: {task_info['func']} @ {current_dt.strftime('%Y-%m-%d %H:%M:%S')}")
-                    try:
-                        func_to_run(self.C)
-                        task_obj.last_executed_date = current_dt.date()
-                    except Exception as e:
-                        print(f"【任务执行失败】{task_info['func']} 运行时错误: {e}")
-
+        
 # ====================================================================
 # 【健壮性模块 3：交易日历工具】(移植自您的 ST 策略)
 # ====================================================================
@@ -258,7 +265,7 @@ def init(C):
         # 回测中使用 TaskRunner 的精确时间模拟
         C.runner.run_daily("11:00", execute_sell_logic)
         C.runner.run_daily("11:05", execute_buy_logic)
-        C.runner.run_daily("15:05", log_position)
+        C.runner.run_daily("14:59", log_position)
         
     else:
         print('doing live - 注册实盘任务')
@@ -272,26 +279,38 @@ def init(C):
 def handlebar(C):
     """
     【健壮性模块 2 延伸：回测日期推进】
-    在回测模式下，使用 handlebar 来推进 ContextInfo 中的日期，
+    在回测模式下，使用 handlebar 来推进 C 中的日期，
     并触发 TaskRunner 检查定时任务。
     """
-    if C.do_back_test:
-        index = C.barpos
-        # 假设 ContextInfo.get_bar_timetag 返回 UTC+0 毫秒时间戳
-        currentTime_ms = C.get_bar_timetag(index) + 8 * 3600 * 1000 # 转换为 UTC+8
-        
-        try:
-            current_dt = datetime.fromtimestamp(currentTime_ms / 1000)
-            if C.currentTime < currentTime_ms:
-                C.currentTime = currentTime_ms
-                C.today = current_dt.date()
-                C.yesterday = get_previous_trading_day(C, C.today).strftime("%Y%m%d")
-                
-                # 检查并执行任务
-                C.runner.check_tasks(current_dt)
-        except Exception as e:
-            print(f'handlebar时间处理异常: {e}')
-    # 非回测模式下，不处理
+    index = C.barpos
+    currentTime = C.get_bar_timetag(index) + 8 * 3600 * 1000
+    try:
+        if C.currentTime < currentTime:
+            C.currentTime = currentTime
+            C.today = pd.to_datetime(currentTime, unit='ms')
+            C.now = pd.to_datetime(currentTime, unit='ms')
+    except Exception as e:
+        print('handlebar异常', currentTime, e)
+
+    if (datetime.now() - timedelta(days=1) > C.today) and not C.do_back_test:
+        # print('非回测模式，历史不处理')
+        return
+    else:
+        if C.do_back_test:
+            # 新增属性，快捷获取当前日期
+            index = C.barpos
+            currentTime = C.get_bar_timetag(index) + 8 * 3600 * 1000
+            # print('当前时间', currentTime)
+            C.currentTime = currentTime
+            C.today = pd.to_datetime(currentTime, unit='ms')
+            C.now = pd.to_datetime(currentTime, unit='ms')
+            current_dt = datetime.fromtimestamp(currentTime / 1000)
+            yesterday_dt = get_previous_trading_day(C, current_dt.date())
+            yesterday = yesterday_dt.strftime("%Y%m%d")
+            C.yesterday = yesterday
+            C.current_dt = current_dt
+            # 检查并执行任务
+            C.runner.check_tasks(C.today)
 
 # -------------------- 拆分后的核心逻辑 (已集成消息推送和交易兼容) --------------------
 
@@ -299,7 +318,7 @@ def execute_sell_logic(C):
     """
     第一阶段：计算信号 并 执行卖出
     """
-    current_time = datetime.now().strftime("%H:%M:%S")
+    current_time = C.now
     print(f"[{current_time}] 阶段1: 开始计算信号并执行卖出...")
     messager.send_message(f"【ETF轮动-信号计算】开始执行卖出逻辑 @ {current_time}")
     
@@ -437,119 +456,125 @@ def log_position(C):
 
 # -------------------- 原有辅助函数 --------------------
 
-def get_safe_price(C, code):
-    if C.do_back_test:
-        data = C.get_market_data_ex(['close'], [code], period=Period, count=1, subscribe=False)
-        if code in data and not data[code].empty:
-            return data[code].iloc[-1]['close']
-        return 0
-    else:
-        tick = C.get_full_tick([code])
-        if code in tick:
-            # 兼容 ST 策略中的实盘价格获取逻辑
-            return tick[code].get('lastPrice', 0)
-        else:
-            data = C.get_market_data_ex(['close'], [code], period=Period, count=1, subscribe=False)
-            if code in data and not data[code].empty:
-                return data[code].iloc[-1]['close']
-            return 0
+def get_safe_price(C, code):    
+    ticksData = C.get_market_data_ex(
+        [],                
+        C.etf_pool,
+        period="1m",
+        start_time = (C.today - timedelta(days=1)).strftime('%Y%m%d%H%M%S'),
+        end_time = C.today.strftime('%Y%m%d%H%M%S'),
+        count=1,
+        dividend_type = "follow",
+        fill_data = False,
+        subscribe = True
+    )
+    if code in ticksData and not ticksData[code].empty:
+        return round(ticksData[code]["close"].iloc[0], 2)
+    return 9999
+
+import pandas as pd
+import numpy as np
+import math
+from datetime import datetime
 
 def filter_etf(C):
     scores = []
     
-    # 【修复点1：区分实盘与回测时间】
+    # 1. 确定当前时间对象
     if C.do_back_test:
         current_dt = datetime.fromtimestamp(C.currentTime / 1000)
     else:
-        current_dt = datetime.now() # 实盘直接取系统时间
-
+        current_dt = datetime.now()
+        
+    # 计算昨天的日期字符串（用于实盘获取纯历史数据）
     yesterday_dt = get_previous_trading_day(C, current_dt.date())
-    yesterday = yesterday_dt.strftime("%Y%m%d")
+    yesterday_str = yesterday_dt.strftime("%Y%m%d")
+    today_str = current_dt.strftime("%Y%m%d")
 
-    # 【关键日志 1：排查日期是否正确】
-    # 如果这里打印的是 1970年，说明时间获取逻辑依然有误；如果是昨天日期，说明正常。
-    print(f"【排查日志-1】计算基准日: {current_dt.strftime('%Y-%m-%d')}，取数截止日: {yesterday}")
+    print(f"【排查日志】当前计算时间: {current_dt}, 历史数据截止(实盘用): {today_str}")
+
+    # 2. 批量获取数据（区分回测和实盘策略）
+    # 聚宽逻辑核心：m_days 的历史 + 1 个当前最新价 = 总长度 m_days + 1
 
     history_data = C.get_market_data_ex(
-        ['close'], 
-        C.etf_pool, 
-        period=Period, 
-        start_time='', 
-        end_time=yesterday, 
-        count=g.m_days + 10, 
-        subscribe=False
+        ['close'], C.etf_pool, period=Period, 
+        start_time='', end_time=yesterday_str, count=g.m_days + 10, 
+        fill_data=False, subscribe=True
     )
-    
-    # 【关键日志 2：排查数据是否获取成功】
-    # 如果是 0/18，说明行情连接断了或者没订阅成功；如果正常应该是 18/18。
-    print(f"【排查日志-2】成功获取历史数据: {len(history_data)} / {len(C.etf_pool)} 只")
+    # print(f"【排查日志-1】获取到的历史数据: {history_data}")
 
+    # 3. 逐个ETF计算
     for etf in C.etf_pool:
-        if etf not in history_data: 
-            # 只有实盘打印缺失的，防止回测刷屏
-            if not C.do_back_test: print(f"  > 警告: {etf} 返回数据为空")
+        if etf not in history_data:
             continue
             
         df = history_data[etf]
         
-        # 数据长度校验
-        if len(df) < g.m_days: 
-            if not C.do_back_test: print(f"  > 忽略: {etf} 数据不足 (只有 {len(df)} 行)")
+        # 实盘下，df 只包含截止到“昨天”的数据
+        if len(df) < g.m_days:
+            print(f" > 忽略: {etf} 实盘历史数据不足")
             continue
         
-        # 价格拼接
-        if not C.do_back_test:
-            current_price = get_safe_price(C, etf)
-            # 【关键日志 3：排查实时价格】
-            # 如果这里打印很多“价格无效”，说明实盘行情推送没跟上
-            if current_price <= 0: 
-                print(f"  > 忽略: {etf} 实时价格无效 ({current_price})")
-                continue
-            closes = df['close'].values[-g.m_days:] 
-            prices = np.append(closes, current_price)
-        else:
-            prices = df['close'].values[-(g.m_days + 1):]
+        # 获取实时价格
+        current_price = get_safe_price(C, etf)
+        if current_price <= 0:
+            print(f" > 忽略: {etf} 实时价格无效")
+            continue
+        
+        # 拼接：历史最后 m_days + 当前价
+        closes_history = df['close'].values[-g.m_days:]
+        prices = np.append(closes_history, current_price)
 
+        # print(etf, "价格list", prices)
+        # 再次校验长度
         if len(prices) < 2: continue
 
-        # --- RSRS 计算 ---
+        # --- 以下逻辑与聚宽完全一致 ---
+        
+        # 1. 准备数据
         y = np.log(prices)
         x = np.arange(len(y))
-        weights = np.linspace(1, 2, len(y))
+        weights = np.linspace(1, 2, len(y)) # 线性加权
+
+        # 2. 计算年化收益率 (Slope)
         slope, intercept = np.polyfit(x, y, 1, w=weights)
         annualized_returns = math.exp(slope * 250) - 1
+
+        # 3. 计算 R²
         y_pred = slope * x + intercept
         ss_res = np.sum(weights * (y - y_pred) ** 2)
         ss_tot = np.sum(weights * (y - np.mean(y)) ** 2)
         r2 = 1 - ss_res / ss_tot if ss_tot != 0 else 0
+
+        # 4. 计算得分
         score = annualized_returns * r2
 
-        # 暴跌过滤
-        is_crash = False
+        # 5. 过滤近3日跌幅超过5%的ETF (Crash Filter)
+        # prices[-1] 是当前/今日，prices[-2] 是昨日
+        # 逻辑：检查 (今日/昨日), (昨日/前日), (前日/大前日)
         if len(prices) >= 4:
-            if min(prices[-1]/prices[-2], prices[-2]/prices[-3], prices[-3]/prices[-4]) < 0.95:
-                is_crash = True
-        
-        if is_crash: 
-            # 仅在实盘打印暴跌过滤，方便确认是不是所有标的都被过滤了
-            if not C.do_back_test: print(f"  > 过滤: {etf} 触发暴跌保护")
-            score = 0
-            
+            drop_1 = prices[-1] / prices[-2]
+            drop_2 = prices[-2] / prices[-3]
+            drop_3 = prices[-3] / prices[-4]
+            if min(drop_1, drop_2, drop_3) < 0.95:
+                score = 0
+                if not C.do_back_test: print(f" > 过滤: {etf} 触发暴跌保护")
+
+        # 6. 加入候选列表
         if 0 < score < 6:
             scores.append({'code': etf, 'score': score})
-            
+
+    # 4. 排序与输出
     df_score = pd.DataFrame(scores)
     
-    # 【关键日志 4：排查最终评分结果】
-    # 如果这里 scores 也是空，说明数据都拿到了，但是都不满足 0 < score < 6
-    if df_score.empty: 
-        print("【排查日志-4】最终结果: 无标的入选 (有效评分列表为空)")
+    if df_score.empty:
         return []
-        
+    
+    # 按得分降序排列
     df_score = df_score.sort_values(by='score', ascending=False)
-    # 打印前3名看看分值是否正常
-    top_list = df_score.head(3).to_dict('records')
-    print(f"【排查日志-4】计算完成。Top3: {top_list}")
+    
+    if not C.do_back_test:
+        print(f"【Top3 预览】: {df_score.head(3).to_dict('records')}")
     
     final_list = df_score['code'].head(g.stock_sum).tolist()
     return final_list
