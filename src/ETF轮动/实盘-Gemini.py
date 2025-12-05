@@ -185,10 +185,17 @@ def passorder_live(C, op_type, code, price, volume, remark):
     """实盘交易下单函数，使用 ST 策略的 passorder 风格"""
     # 假设 23=买入, 24=卖出, 7=限价，5=最新价
     if op_type == 23: # 买入
-        passorder(23, 1101, C.account_id, code, 7, price, volume, remark, C)
+        # 有bug，不知为何，改为之前策略的买入函数
+        # passorder(23, 1101, C.account_id, code, 7, price, volume, remark, C)
+        try:
+            passorder(23, 1101, C.account_id, code, 5, -1, volume, remark, 1, remark, C)
+        except Exception as e:
+            print('买入股票(实盘)失败:', e)
         
     elif op_type == 24: # 卖出
-        passorder(24, 1101, C.account_id, code, 7, price, volume, remark, C)
+        # passorder(24, 1101, C.account_id, code, 7, price, volume, remark, C)
+        passorder(24, 1123, C.account_id, code, 6, 1, 1, remark, 1, remark, C)
+
     print(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.2f}, 数量: {volume}")
 
 def order_target_value_test(C, code, target_value):
