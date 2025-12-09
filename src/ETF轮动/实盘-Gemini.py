@@ -18,6 +18,7 @@ g = G()
 g.stock_sum = 1       
 g.m_days = 25         
 g.min_money = 500  
+g.today_target_positions = {}
 
 # 账户和Webhook配置
 # 模拟账号
@@ -252,8 +253,6 @@ def init(C):
         "159550.SZ", "512710.SH", "159692.SZ",
     ]
 
-    C.today_target_positions = {} 
-
     # 判断当前日期是否为周末 (仅实盘需要主动过滤)
     if not C.do_back_test and datetime.now().weekday() >= 5:
         print('当前日期为周末，不执行任务')
@@ -271,7 +270,7 @@ def init(C):
         print('doing live - 注册实盘任务')
         # 实盘中使用平台 run_time 接口
         C.run_time("execute_sell_logic","1nDay","2025-12-01 11:00:00","SH")
-        C.run_time("execute_buy_logic","1nDay","2025-12-01 11:05:00","SH")
+        C.run_time("execute_buy_logic","1nDay","2025-12-01 11:03:00","SH")
         C.run_time("log_position","1nDay","2025-12-01 15:00:00","SH")
 
     print("策略初始化完成，已设置为分步调仓模式")
@@ -325,6 +324,7 @@ def execute_sell_logic(C):
     # 1. 筛选目标ETF
     target_list = filter_etf(C)
     print("今日选中目标:", target_list)
+    messager.send_message(f"【ETF轮动-信号计算】今日选中目标: {target_list}")
     
     # 2. 计算目标持仓金额
     target_positions = {}
@@ -337,7 +337,8 @@ def execute_sell_logic(C):
         for code in target_list:
             target_positions[code] = per_value
     
-    C.today_target_positions = target_positions
+    g.today_target_positions = target_positions
+    print("今日目标持仓:", target_positions)
     
     # 3. 执行卖出操作
     positions = get_trade_detail_data(C.account_id, 'stock', 'position')
@@ -357,7 +358,7 @@ def execute_sell_logic(C):
         if price <= 0 or pos_obj.m_nCanUseVolume <= 0: continue
 
         current_market_value = pos_obj.m_nCanUseVolume * price
-        target_val = C.today_target_positions.get(code, 0.0)
+        target_val = g.today_target_positions.get(code, 0.0)
         
         if current_market_value > target_val:
             diff = current_market_value - target_val
@@ -384,10 +385,10 @@ def execute_buy_logic(C):
     第二阶段：执行买入
     """
     current_time = datetime.now().strftime("%H:%M:%S")
-    print(f"[{current_time}] 阶段2: 资金应已回笼，开始执行买入...")
+    print(f"[{current_time}] 阶段2: 资金应已回笼，开始执行买入...", g.today_target_positions)
     messager.send_message(f"【ETF轮动-交易】开始执行买入逻辑 @ {current_time}")
     
-    target_positions = C.today_target_positions
+    target_positions = g.today_target_positions
     if not target_positions:
         messager.send_message("今日无买入目标")
         return
