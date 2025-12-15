@@ -165,7 +165,7 @@ class TradingStrategy:
         # 策略基础配置和状态变量
         self.no_trading_today_signal: bool = False  # 【慎用！！！快捷平仓选项】当天是否执行空仓（资金再平衡）操作
         self.pass_april: bool = False                # 是否在04月或01月期间执行空仓策略
-        self.run_stoploss: bool = True              # 是否启用止损策略
+        self.run_stoploss: bool = False              # 是否启用止损策略
 
         # 持仓和调仓记录
         self.hold_list: List[str] = []             # 当前持仓股票代码列表
