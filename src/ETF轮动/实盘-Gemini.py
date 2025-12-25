@@ -377,9 +377,18 @@ def execute_sell_logic(C):
                         order_target_value_test(C, code, target_val) 
                     else:
                         # 实盘模式：限价卖出
-                        # 使用 price 作为限价，确保及时成交（使用最新价）
-                        passorder_live(C, 24, code, price, vol_to_sell, "ETF_SELL_TUNE")
-            
+                        # 拆单逻辑：单笔最大委托数量限制
+                        MAX_ORDER_VOL = 900000
+                        remaining_vol = vol_to_sell
+                        
+                        while remaining_vol > 0:
+                            current_order_vol = min(remaining_vol, MAX_ORDER_VOL)
+                            passorder_live(C, 24, code, price, current_order_vol, "ETF_SELL_TUNE")
+                            remaining_vol -= current_order_vol
+                            if remaining_vol > 0:
+                                print(f"大额拆单卖出: 本次下单 {current_order_vol}, 剩余 {remaining_vol}")
+                                time.sleep(0.2)
+
 def execute_buy_logic(C):
     """
     第二阶段：执行买入
@@ -401,7 +410,14 @@ def execute_buy_logic(C):
     positions = get_trade_detail_data(C.account_id, 'stock', 'position')
     current_holdings = {obj.m_strInstrumentID + '.' + obj.m_strExchangeID: obj for obj in positions}
     
-    for code, target_val in target_positions.items():
+    # 重新计算目标市值（修复资金不足bug）
+    total_asset = get_total_asset(C)
+    target_list = list(target_positions.keys())
+    per_value = total_asset / len(target_list) if target_list else 0
+    print(f"买入阶段重新计算: 总资产={total_asset:.2f}, 单标的={per_value:.2f}")
+
+    for code in target_list:
+        target_val = per_value - 1000 # 留1000块buffer，防止资金不足
         price = get_safe_price(C, code)
         if price <= 0: continue
 
@@ -428,7 +444,17 @@ def execute_buy_logic(C):
                         order_target_value_test(C, code, target_val)
                     else:
                         # 实盘模式：限价买入
-                        passorder_live(C, 23, code, price, vol_to_buy, "ETF_BUY_TUNE")
+                        # 拆单逻辑：单笔最大委托数量限制
+                        MAX_ORDER_VOL = 900000
+                        remaining_vol = vol_to_buy
+                        
+                        while remaining_vol > 0:
+                            current_order_vol = min(remaining_vol, MAX_ORDER_VOL)
+                            passorder_live(C, 23, code, price, current_order_vol, "ETF_BUY_TUNE")
+                            remaining_vol -= current_order_vol
+                            if remaining_vol > 0:
+                                print(f"大额拆单买入: 本次下单 {current_order_vol}, 剩余 {remaining_vol}")
+                                time.sleep(0.2)
 
 def cancel_unfilled_orders(C):
     """撤销当前策略的所有未成交挂单"""
