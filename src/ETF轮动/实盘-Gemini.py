@@ -343,7 +343,7 @@ def execute_sell_logic(C):
     # 1. 筛选目标ETF
     target_list = filter_etf(C)
     print("今日选中目标:", target_list)
-    messager.send_message(f"【ETF轮动-信号计算】今日选中目标: {target_list}")
+    messager.send_message(f"【ETF轮动-信号计算】今日选中目标: {target_list}, {[C.get_stock_name(code) for code in target_list]}")
     
     # 2. 计算目标持仓金额
     target_positions = {}
@@ -620,7 +620,7 @@ def filter_etf(C):
     df_score = df_score.sort_values(by='score', ascending=False)
     
     if not C.do_back_test:
-        print(f"【Top3 预览】: {df_score.head(3).to_dict('records')}")
+        messager.send_message(f"【Top3 预览】: {df_score.head(3).to_dict('records')}, {[C.get_stock_name(code) for code in df_score.head(3)['code']]}")
     
     # --- 防抖逻辑 ---
     # 获取当前持仓
