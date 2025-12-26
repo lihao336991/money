@@ -18,6 +18,7 @@ g = G()
 g.stock_sum = 1       
 g.m_days = 25         
 g.min_money = 500  
+g.switch_threshold = 0.1 # 换仓阈值：新标的得分需超过当前持仓 10% 才换仓
 g.today_target_positions = {}
 
 # 账户和Webhook配置
@@ -603,5 +604,36 @@ def filter_etf(C):
     if not C.do_back_test:
         print(f"【Top3 预览】: {df_score.head(3).to_dict('records')}")
     
+    # --- 防抖逻辑 ---
+    # 获取当前持仓
+    positions = get_trade_detail_data(C.account_id, 'stock', 'position')
+    current_holdings = [codeOfPosition(obj) for obj in positions]
+    
+    # 找到当前持仓中属于ETF池的标的
+    held_etf = None
+    for h in current_holdings:
+        if h in C.etf_pool:
+            held_etf = h
+            break
+            
+    if held_etf and not df_score.empty:
+        # 获取第一名
+        top_etf = df_score.iloc[0]['code']
+        top_score = df_score.iloc[0]['score']
+        
+        # 如果第一名不是当前持仓
+        if top_etf != held_etf:
+            # 检查当前持仓的得分
+            held_row = df_score[df_score['code'] == held_etf]
+            if not held_row.empty:
+                held_score = held_row.iloc[0]['score']
+                
+                # 如果第一名得分没有超过当前持仓得分的 (1 + threshold) 倍
+                if top_score < held_score * (1 + g.switch_threshold):
+                    if not C.do_back_test:
+                        print(f"【防抖动】当前持仓 {held_etf} (分:{held_score:.4f}) vs 第一名 {top_etf} (分:{top_score:.4f})")
+                        print(f" > 优势不足 {g.switch_threshold*100}%，保持持仓")
+                    return [held_etf]
+
     final_list = df_score['code'].head(g.stock_sum).tolist()
     return final_list
