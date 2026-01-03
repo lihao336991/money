@@ -1030,7 +1030,7 @@ class TradingStrategy:
         today_str = datetime.fromtimestamp(context.currentTime / 1000).strftime('%m-%d')
         print(today_str)
         if self.pass_april:
-            if ('04-01' <= today_str <= '04-30') or ('01-01' <= today_str <= '01-30'):
+            if ('04-01' <= today_str <= '04-30') or ('01-15' <= today_str <= '01-30'):
                 return True
             else:
                 return False
