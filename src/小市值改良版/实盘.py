@@ -161,7 +161,7 @@ class TradingStrategy:
     通过类属性管理持仓、候选股票等状态，并使用状态机字典记录交易信号，
     便于后续调试、扩展和维护。
     """
-    def __init__(self) -> None:
+    def __init__(self):
         # 策略基础配置和状态变量
         self.no_trading_today_signal: bool = False  # 【慎用！！！快捷平仓选项】当天是否执行空仓（资金再平衡）操作
         self.pass_april: bool = False                # 是否在04月或01月期间执行空仓策略
@@ -191,11 +191,11 @@ class TradingStrategy:
             'sell_signal': False,
             'risk_level': 'normal'
         }
-
+        
         self.pool = []
         self.pool_initialized = False
 
-    def initialize(self, context: Any) -> None:
+    def initialize(self, context: Any):
         """
         策略初始化函数
 
@@ -249,7 +249,7 @@ class TradingStrategy:
         else:
             return datetime.date(year, 9, 30)     # 三季报
 
-    def check_holdings_yesterday(self, context: Any) -> None:
+    def check_holdings_yesterday(self, context: Any):
         """
         检查并输出每只持仓股票昨日的交易数据（开盘价、收盘价、涨跌幅）。
 
@@ -308,7 +308,7 @@ class TradingStrategy:
         dic['low_list'] = low_list
         return dic
 
-    def prepare_stock_list(self, context: Any) -> None:
+    def prepare_stock_list(self, context: Any):
         """
         更新持仓股票列表和昨日涨停股票列表，同时判断是否为空仓日（资金再平衡日）。
 
@@ -327,7 +327,7 @@ class TradingStrategy:
             print("昨日涨停:", self.yesterday_HL_list)
 
     # 【回测时使用】回测初始状态跑一遍当时的市值前200名股票，之后都在这200只里选择，为了优化性能（取市值时只能跑全量最新价格，非常费性能）
-    def get_stock_pool_when_test(self, context: Any) -> List[str]:
+    def get_stock_pool_when_test(self, context: Any):
         whole_list = context.get_stock_list_in_sector('中小综指')
         list = self.sort_by_market_cup(context, whole_list)
         self.pool = list[:100]
@@ -335,14 +335,14 @@ class TradingStrategy:
         return self.pool
 
     # 正常来说，是每次都从中小板取所有股票来筛选，但是回测性能太差，只用于实盘    
-    def get_stock_pool(self, context: Any) -> List[str]:
+    def get_stock_pool(self, context: Any):
         return context.get_stock_list_in_sector('中小综指')
 
     # Position的完整品种代码
     def codeOfPosition(self, position):
         return position.m_strInstrumentID + '.' + position.m_strExchangeID
     
-    def sort_by_market_cup(self, context, origin_list) -> List[str]:
+    def sort_by_market_cup(self, context, origin_list):
         ticks = context.get_market_data_ex(
             ['close'],                
             origin_list,
@@ -400,9 +400,12 @@ class TradingStrategy:
         start_date = datetime.fromtimestamp(lastYearCurrentTime).strftime('%Y%m%d')
         eps = context.get_raw_financial_data(['利润表.净利润', '利润表.营业收入', '股本表.总股本'], initial_list, start_date, end_date)
         
+        if eps is None:
+            print("未获取到财务数据，跳过本次选股")
+            return []
+
         df_result = pd.DataFrame(columns=['code', 'name', 'market_cap', 'lastPrice', 'stock_num'])
-        finance = 0
-        income = 0
+        
         ticks = context.get_market_data_ex(
             ['close'],                
             initial_list,
@@ -417,18 +420,34 @@ class TradingStrategy:
         # 选不出来股的时候，这个注释打开看看有没有数
         # print(ticks, '看看tocks')
         for code in initial_list:
-            # TODO 基本面筛选，去年净利润大于1e，营业收入大于1e
-            finance_list = list(eps[code]['利润表.净利润'].values())
-            income_list = list(eps[code]['利润表.营业收入'].values())
-            stock_num_list = list(eps[code]['股本表.总股本'].values())
-            if finance_list and income_list and stock_num_list:
-                finance = finance_list[-1]
-                income = income_list[-1]
-                stock_num = stock_num_list[-1]
-            # money = eps[code].loc[end_date, '资产负债表.固定资产']
-            # 筛选出净利润大于0，营业收入大于1e的股票，期末净资产为正的 
+            # 1. 初始化变量，防止沿用上一只股票的数据
+            finance = 0
+            income = 0
+            stock_num = 0
+
+            # 2. 检查行情数据是否存在
+            if code not in ticks or ticks[code] is None or ticks[code].empty:
+                continue
+
+            # 3. 检查基本面数据是否存在
+            if code not in eps or eps[code] is None:
+                continue
+
+            # 基本面筛选，去年净利润大于1e，营业收入大于1e
             try:
-                if eps is not None and eps[code] is not None and finance > 0 and income > 100000000:
+                finance_list = list(eps[code]['利润表.净利润'].values())
+                income_list = list(eps[code]['利润表.营业收入'].values())
+                stock_num_list = list(eps[code]['股本表.总股本'].values())
+                
+                if finance_list and income_list and stock_num_list:
+                    finance = finance_list[-1]
+                    income = income_list[-1]
+                    stock_num = stock_num_list[-1]
+                else:
+                    continue
+
+                # 筛选出净利润大于0，营业收入大于1e的股票
+                if finance > 0 and income > 100000000:
                     market_cap = ticks[code].iloc[0, 0] * stock_num
                     df_result = df_result.append({
                         'code': code,
@@ -437,24 +456,25 @@ class TradingStrategy:
                         'lastPrice': ticks[code].iloc[0, 0],
                         'stock_num': stock_num
                         }, ignore_index=True)
-            except IndexError:
-                print(f"股票{code}基本面筛查异常, 昨日数据：{ticks[code]}，\finance{finance}\n income:{income},\n stock_num:{stock_num}")
+            except Exception as e:
+                print(f"股票{code}基本面筛查异常: {e}")
+
         df_result = df_result.sort_values(by='market_cap', ascending=True)  
         # 缓存df对象，方便查询某只股票数据
         context.stock_df = df_result
-        stock_list: List[str] = list(df_result.code)
+        stock_list = list(df_result.code)
         # print("看看前20的股票", df_result[:20])
         return stock_list
     
     # 定期获取目标股票列表
-    def internal_get_target_list(self, context: Any) -> List[str]:
+    def internal_get_target_list(self, context: Any):
         # 缓存一条离线target_list，调仓日会拿实时数据与之比较，当有较多股票不一致时，发送警告给我
         context.cache_target_list = self.get_stock_list(context)
         messager.sendLog("离线调仓数据整理完毕，目标持股列表如下" )
         self.log_target_list(context, context.cache_target_list)
         
 
-    def get_stock_list(self, context: Any, fromCache: bool = False) -> List[str]:
+    def get_stock_list(self, context: Any, fromCache: bool = False):
         """
         选股模块：
         1. 从指定股票池（如 399101.XSHE 指数成分股）中获取初步股票列表；
@@ -519,7 +539,7 @@ class TradingStrategy:
         for code in target_list:
             print(context.get_stock_name(code))
 
-    def log_target_list(self, context: Any, stock_list: List[str]) -> None:
+    def log_target_list(self, context: Any, stock_list: List[str]):
         """
         打印目标股票列表信息，用于人工确认程序无误（有时候平台接口抽风，选出来的股票并非小市值）。
         """
@@ -534,7 +554,7 @@ class TradingStrategy:
         messager.sendLog(msg)
 
 
-    def weekly_adjustment(self, context: Any) -> None:
+    def weekly_adjustment(self, context: Any):
         """
         每周调仓策略：
         如果非空仓日，先选股得到目标股票列表，再卖出当前持仓中不在目标列表且昨日未涨停的股票，
@@ -571,7 +591,7 @@ class TradingStrategy:
                 else:
                     print(f"持有股票 {stock}")
 
-    def weekly_adjustment_buy(self, context: Any) -> None:
+    def weekly_adjustment_buy(self, context: Any):
         print('调仓买入阶段...是否在禁止交易窗口：', self.no_trading_today_signal)
         if not self.no_trading_today_signal:
             # 遍历当前持仓，若股票不在目标列表且非昨日涨停，则执行卖出操作
@@ -581,7 +601,7 @@ class TradingStrategy:
             # self.buy_security(context, target_list)
             self.new_buy_target(context)
 
-    def check_limit_up(self, context: Any) -> None:
+    def check_limit_up(self, context: Any):
         """
         检查昨日处于涨停状态的股票在当前是否破板。
         如破板（当前价格低于涨停价），则立即卖出该股票，并记录卖出原因为 "limitup"。
@@ -630,7 +650,7 @@ class TradingStrategy:
 
     
 
-    def check_remain_amount(self, context: Any) -> None:
+    def check_remain_amount(self, context: Any):
         """
         检查账户资金与持仓数量：
         如果因涨停破板卖出导致持仓不足，则从目标股票中筛选未买入股票，进行补仓操作。
@@ -646,7 +666,7 @@ class TradingStrategy:
         else:
             print("未检测到涨停破板卖出事件，不进行补仓买入。")
 
-    def trade_afternoon(self, context: Any) -> None:
+    def trade_afternoon(self, context: Any):
         """
         下午交易任务：
         1. 检查是否有因为涨停破板触发的卖出信号；
@@ -678,7 +698,7 @@ class TradingStrategy:
         percent = round(100 * (lastPrice - lastClose) / lastClose, 2)
         return percent
         
-    def sell_stocks(self, context: Any) -> None:
+    def sell_stocks(self, context: Any):
         """
         止盈与止损操作：
         根据策略（1: 个股止损；2: 大盘止损；3: 联合策略）判断是否执行卖出操作。
@@ -762,7 +782,7 @@ class TradingStrategy:
             cur_volume
         }
 
-    def check_high_volume(self, context: Any) -> None:
+    def check_high_volume(self, context: Any):
         """
         检查持仓股票当日成交量是否异常放量：
         如果当日成交量大于过去 HV_duration 天内最大成交量的 HV_ratio 倍，则视为异常，执行卖出操作。
@@ -783,7 +803,7 @@ class TradingStrategy:
 
     # 过滤器函数（均采用列表推导式实现，确保在遍历时不会修改列表）
 
-    def filter_paused_stock(self, context, stock_list: List[str]) -> List[str]:
+    def filter_paused_stock(self, context, stock_list: List[str]):
         """
         过滤停牌的股票
 
@@ -795,7 +815,7 @@ class TradingStrategy:
         """
         return [stock for stock in stock_list if not context.is_suspended_stock(stock)]
 
-    def filter_st_stock(self, context, stock_list: List[str]) -> List[str]:
+    def filter_st_stock(self, context, stock_list: List[str]):
         """
         过滤带有 ST 或其他风险标识的股票
 
@@ -811,7 +831,7 @@ class TradingStrategy:
             return ('ST' not in name) and ('*' not in name) and ('退' not in name) and (stock_data['ExpireDate'] != 0 or stock_data['ExpireDate'] != 99999999)
         return [stock for stock in stock_list if not_st_stock(stock)]
 
-    def filter_kcbj_stock(self, stock_list: List[str]) -> List[str]:
+    def filter_kcbj_stock(self, stock_list: List[str]):
         """
         过滤科创、北交股票
 
@@ -823,7 +843,7 @@ class TradingStrategy:
         """
         return [stock for stock in stock_list if stock[0] not in ('4', '8') and not stock.startswith('68')]
 
-    def filter_limitup_stock(self, context: Any, stock_list: List[str]) -> List[str]:
+    def filter_limitup_stock(self, context: Any, stock_list: List[str]):
         """
         过滤当天已经涨停的股票（若未持仓则过滤）
 
@@ -837,7 +857,7 @@ class TradingStrategy:
         data = self.find_limit_list(context, stock_list)
         return [stock for stock in stock_list if stock not in data['high_list']]
 
-    def filter_limitdown_stock(self, context: Any, stock_list: List[str]) -> List[str]:
+    def filter_limitdown_stock(self, context: Any, stock_list: List[str]):
         """
         过滤当天已经跌停的股票（若未持仓则过滤）
 
@@ -852,7 +872,7 @@ class TradingStrategy:
         print('跌停列表', data['low_list'])
         return [stock for stock in stock_list if stock not in data['low_list']]
 
-    def filter_new_stock(self, context: Any, stock_list: List[str]) -> List[str]:
+    def filter_new_stock(self, context: Any, stock_list: List[str]):
         """
         过滤次新股：排除上市时间不足375天的股票
 
@@ -875,7 +895,7 @@ class TradingStrategy:
                 return True
         return [stock for stock in stock_list if not is_new_stock(stock)]
 
-    def filter_highprice_stock(self, context: Any, stock_list: List[str]) -> List[str]:
+    def filter_highprice_stock(self, context: Any, stock_list: List[str]):
         """
         过滤股价高于设定上限（up_price）的股票（非持仓股票参与过滤）
 
@@ -888,7 +908,7 @@ class TradingStrategy:
         """
         return [stock for stock in stock_list if context.get_instrumentdetail(stock)['PreClose'] <= self.up_price]
 
-    def filter_not_buy_again(self, stock_list: List[str]) -> List[str]:
+    def filter_not_buy_again(self, stock_list: List[str]):
         """
         过滤掉当日已买入的股票，避免重复下单
 
@@ -908,7 +928,7 @@ class TradingStrategy:
     
     # 实盘的买入非常复杂，需要考虑部分成交的情况，以及长时间委托不成交的情况，这里单开一个函数进行，且进行定时循环调用
     # 这里有问题，不能和open_position在同一作用域。QMT貌似不支持多线程工作，因此需要整体循环买入后，整体定时检测再撤单。
-    def open_position(self, context, security: str, value: float = 0) -> bool:
+    def open_position(self, context, security: str, value: float = 0):
         """
         开仓操作：尝试买入指定股票，支持指定股票数量或者金额
 
@@ -925,7 +945,7 @@ class TradingStrategy:
         
         passorder(23, 1102, context.account, security, 5, -1, value, lastOrderId, 1, lastOrderId, context)
 
-    def close_position(self, context, stock: Any) -> bool:
+    def close_position(self, context, stock: Any):
         """
         平仓操作：尽可能将指定股票仓位全部卖出
 
@@ -953,7 +973,7 @@ class TradingStrategy:
         return money
         
 
-    def buy_security(self, context: Any, target_list: List[str]) -> None:
+    def buy_security(self, context: Any, target_list: List[str]):
         """
         买入操作：对目标股票执行买入，下单资金均摊分配
 
@@ -1017,7 +1037,7 @@ class TradingStrategy:
             self.open_position(context, stock, single_mount)
 
     
-    def today_is_between(self, context: Any) -> bool:
+    def today_is_between(self, context: Any):
         """
         判断当前日期是否为资金再平衡（空仓）日，通常在04月或01月期间执行空仓操作
 
@@ -1045,7 +1065,7 @@ class TradingStrategy:
     def get_stock_list_of_positions(self, context):
         return [position.m_strInstrumentID for position in self.positions]
 
-    def close_account(self, context: Any) -> None:
+    def close_account(self, context: Any):
         """
         清仓操作：若当天为空仓日，则平仓所有持仓股票
 
@@ -1058,7 +1078,7 @@ class TradingStrategy:
                     self.close_position(context, stock)
                     print(f"空仓日平仓，卖出股票 {stock}。")
 
-    def print_position_info(self, context: Any) -> None:
+    def print_position_info(self, context: Any):
         """
         打印当前持仓详细信息，包括股票代码、成本价、现价、涨跌幅、持仓股数和市值
 
@@ -1103,7 +1123,7 @@ strategy = TradingStrategy()
 
 # 全局包装函数，必须为顶层函数，保证调度任务可序列化，不使用 lambda
 
-def prepare_stock_list_func(context: Any) -> None:
+def prepare_stock_list_func(context: Any):
     """
     包装调用策略实例的 prepare_stock_list 方法
 
@@ -1116,7 +1136,7 @@ def prepare_stock_list_func(context: Any) -> None:
 
 
 
-def check_holdings_yesterday_func(context: Any) -> None:
+def check_holdings_yesterday_func(context: Any):
     """
     包装调用策略实例的 check_holdings_yesterday 方法
 
@@ -1127,7 +1147,7 @@ def check_holdings_yesterday_func(context: Any) -> None:
     print('--------------------------------', '新的一天开始了', context.today, '--------------------------------')
 
 
-def weekly_adjustment_func(context: Any) -> None:
+def weekly_adjustment_func(context: Any):
     """
     包装调用策略实例的 weekly_adjustment 方法
 
@@ -1137,7 +1157,7 @@ def weekly_adjustment_func(context: Any) -> None:
     print('================== 每周调仓时间 ==================')
     strategy.weekly_adjustment(context)
 
-def weekly_adjustment_buy_func(context: Any) -> None:
+def weekly_adjustment_buy_func(context: Any):
     """
     包装调用策略实例的 weekly_adjustment 方法
 
@@ -1147,7 +1167,7 @@ def weekly_adjustment_buy_func(context: Any) -> None:
     strategy.weekly_adjustment_buy(context)
 
 
-def sell_stocks_func(context: Any) -> None:
+def sell_stocks_func(context: Any):
     """
     包装调用策略实例的 sell_stocks 方法
 
@@ -1158,7 +1178,7 @@ def sell_stocks_func(context: Any) -> None:
     strategy.sell_stocks(context)
 
 
-def trade_afternoon_func(context: Any) -> None:
+def trade_afternoon_func(context: Any):
     """
     包装调用策略实例的 trade_afternoon 方法
 
@@ -1168,7 +1188,7 @@ def trade_afternoon_func(context: Any) -> None:
     print('下午交易阶段...')
     strategy.trade_afternoon(context)
 
-def close_account_func(context: Any) -> None:
+def close_account_func(context: Any):
     """
     包装调用策略实例的 close_account 方法
 
@@ -1179,7 +1199,7 @@ def close_account_func(context: Any) -> None:
     strategy.close_account(context)
 
 
-def print_position_info_func(context: Any) -> None:
+def print_position_info_func(context: Any):
     """
     包装调用策略实例的 print_position_info 方法
 
@@ -1188,7 +1208,7 @@ def print_position_info_func(context: Any) -> None:
     """
     strategy.print_position_info(context)
     
-def log_target_list_info(context: Any) -> None:
+def log_target_list_info(context: Any):
     """
     打印目标股票池信息
 
@@ -1300,7 +1320,7 @@ def testRunBuy(context):
     print("执行买入逻辑")
     weekly_adjustment_buy_func(context)
 
-def init(context: Any) -> None:
+def init(context: Any):
     # 初始化策略环境及参数
     strategy.initialize(context)
     context.runner = TaskRunner(context)
