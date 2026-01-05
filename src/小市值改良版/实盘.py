@@ -1313,18 +1313,15 @@ class TaskRunner:
 def testRunBuy(context):
     check_holdings_yesterday_func(context)
     prepare_stock_list_func(context)
-    weekly_adjustment_func(context)
-
-    nativeTime.sleep(5)
     print('一段时间以后，假设之前的卖出已成交...')
     print("执行买入逻辑")
-    weekly_adjustment_buy_func(context)
 
 def init(context: Any):
     # 初始化策略环境及参数
     strategy.initialize(context)
     context.runner = TaskRunner(context)
     messager.set_is_test(context.do_back_test)
+    
     # 调试代码，实盘调试，慎用！！！！
     # testRunBuy(context)
 
