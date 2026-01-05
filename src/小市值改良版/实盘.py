@@ -535,7 +535,7 @@ class TradingStrategy:
     def find_target_stock_list(self, context):
         self.target_list = self.get_stock_list(context, fromCache=False)        
         target_list: List[str] = self.target_list[:self.stock_num]
-        print('今日股票池(缓存中读取):', target_list)
+        print('今日股票池:', target_list)
         for code in target_list:
             print(context.get_stock_name(code))
 
@@ -1313,6 +1313,7 @@ class TaskRunner:
 def testRunBuy(context):
     check_holdings_yesterday_func(context)
     prepare_stock_list_func(context)
+    weekly_adjustment_func(context)
     print('一段时间以后，假设之前的卖出已成交...')
     print("执行买入逻辑")
 
