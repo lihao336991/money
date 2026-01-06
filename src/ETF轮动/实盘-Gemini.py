@@ -293,6 +293,7 @@ def init(C):
         C.run_time("log_position","1nDay","2025-12-01 15:00:00","SH")
 
     print("策略初始化完成，已设置为分步调仓模式")
+    
 
 def handlebar(C):
     """
@@ -609,6 +610,8 @@ def filter_etf(C):
         # 6. 加入候选列表
         if 0 < score < 6:
             scores.append({'code': etf, 'score': score})
+        else:
+            print(f" > 过滤: {etf} 得分异常 ({score:.4f})")
 
     # 4. 排序与输出
     df_score = pd.DataFrame(scores)
@@ -622,6 +625,7 @@ def filter_etf(C):
     if not C.do_back_test:
         messager.send_message(f"【Top3 预览】: {df_score.head(3).to_dict('records')}, {[C.get_stock_name(code) for code in df_score.head(3)['code']]}")
     
+    print(f"【排查日志-2】计算得到的得分: {df_score}")
     # --- 防抖逻辑 ---
     # 获取当前持仓
     positions = get_trade_detail_data(C.account_id, 'stock', 'position')
