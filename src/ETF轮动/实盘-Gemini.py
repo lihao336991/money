@@ -226,6 +226,20 @@ def get_total_asset(C):
         money = dt.m_dBalance
     return money
 
+def get_strategy_asset(C):
+    """计算策略可用总资产（扣除不在ETF池中的手动持仓市值）"""
+    total_asset = get_total_asset(C)
+    positions = get_trade_detail_data(C.account_id, 'stock', 'position')
+    manual_holdings_value = 0.0
+    
+    for pos in positions:
+        code = codeOfPosition(pos)
+        if code not in C.etf_pool:
+            manual_holdings_value += pos.m_dMarketValue
+            
+    strategy_asset = total_asset - manual_holdings_value
+    return strategy_asset
+
 # ====================================================================
 # 【核心策略逻辑】
 # ====================================================================
@@ -348,12 +362,13 @@ def execute_sell_logic(C):
     
     # 2. 计算目标持仓金额
     target_positions = {}
-    total_asset = get_total_asset(C)
+    # 使用策略专用资产计算（扣除手动持仓）
+    strategy_asset = get_strategy_asset(C)
 
-    print(f"当前账户总金额: {total_asset:.2f}")
+    print(f"当前账户总资产: {get_total_asset(C):.2f}, 策略可用资产: {strategy_asset:.2f}")
     
-    if total_asset > 0 and target_list:
-        per_value = total_asset / len(target_list)
+    if strategy_asset > 0 and target_list:
+        per_value = strategy_asset / len(target_list)
         for code in target_list:
             target_positions[code] = per_value
     
@@ -369,6 +384,11 @@ def execute_sell_logic(C):
     # 如果已经持仓，且持仓比例不小于目标持仓比例，不需要执行后续逻辑
 
     for code in list(current_holdings.keys()):
+        # 忽略不在ETF池中的手动持仓
+        if code not in C.etf_pool:
+            print(f"{code} 非策略标的(手动持仓)，忽略")
+            continue
+
         if code in target_list: 
             print(f"{code} 继续持仓")
             continue
@@ -431,10 +451,11 @@ def execute_buy_logic(C):
     current_holdings = {obj.m_strInstrumentID + '.' + obj.m_strExchangeID: obj for obj in positions}
     
     # 重新计算目标市值（修复资金不足bug）
-    total_asset = get_total_asset(C)
+    # 使用策略专用资产计算
+    strategy_asset = get_strategy_asset(C)
     target_list = list(target_positions.keys())
-    per_value = total_asset / len(target_list) if target_list else 0
-    print(f"买入阶段重新计算: 总资产={total_asset:.2f}, 单标的={per_value:.2f}")
+    per_value = strategy_asset / len(target_list) if target_list else 0
+    print(f"买入阶段重新计算: 策略总资产={strategy_asset:.2f}, 单标的={per_value:.2f}")
 
     for code in target_list:
         target_val = per_value - 1000 # 留1000块buffer，防止资金不足
