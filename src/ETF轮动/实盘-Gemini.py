@@ -203,7 +203,8 @@ def passorder_live(C, op_type, code, price, volume, remark):
         
     elif op_type == 24: # 卖出
         # passorder(24, 1101, C.account_id, code, 7, price, volume, remark, C)
-        passorder(24, 1123, C.account_id, code, 6, 1, 1, remark, 1, remark, C)
+        # 修复bug: 使用传入的 volume 和 price，而不是硬编码的 1
+        passorder(24, 1123, C.account_id, code, 6, price, volume, remark, 1, remark, C)
 
     print(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.2f}, 数量: {volume}")
 
