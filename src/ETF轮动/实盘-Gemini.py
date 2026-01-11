@@ -194,19 +194,15 @@ def passorder_live(C, op_type, code, price, volume, remark):
     """实盘交易下单函数，使用 ST 策略的 passorder 风格"""
     # 假设 23=买入, 24=卖出, 7=限价，5=最新价
     if op_type == 23: # 买入
-        # 有bug，不知为何，改为之前策略的买入函数
-        # passorder(23, 1101, C.account_id, code, 7, price, volume, remark, C)
         try:
             passorder(23, 1101, C.account_id, code, 5, -1, volume, remark, 1, remark, C)
         except Exception as e:
             print('买入股票(实盘)失败:', e)
         
     elif op_type == 24: # 卖出
-        # passorder(24, 1101, C.account_id, code, 7, price, volume, remark, C)
-        # 修复bug: 使用传入的 volume 和 price，而不是硬编码的 1
         passorder(24, 1123, C.account_id, code, 6, price, volume, remark, 1, remark, C)
 
-    print(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.2f}, 数量: {volume}")
+    messager.send_message(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.2f}, 数量: {volume}")
 
 def order_target_value_test(C, code, target_value):
     """回测模式下按市值调仓 (ST 策略的 order_target_value 风格)"""
@@ -418,17 +414,17 @@ def execute_sell_logic(C):
                         order_target_value_test(C, code, target_val) 
                     else:
                         # 实盘模式：限价卖出
-                        # 拆单逻辑：单笔最大委托数量限制
-                        MAX_ORDER_VOL = 900000
-                        remaining_vol = vol_to_sell
-                        
-                        while remaining_vol > 0:
-                            current_order_vol = min(remaining_vol, MAX_ORDER_VOL)
-                            passorder_live(C, 24, code, price, current_order_vol, "ETF_SELL_TUNE")
-                            remaining_vol -= current_order_vol
-                            if remaining_vol > 0:
-                                print(f"大额拆单卖出: 本次下单 {current_order_vol}, 剩余 {remaining_vol}")
-                                time.sleep(0.2)
+                        # 简化拆单逻辑：固定分两笔委托
+                        if vol_to_sell >= 200:
+                            vol1 = int(vol_to_sell / 2 / 100) * 100
+                            vol2 = vol_to_sell - vol1
+                            
+                            print(f"分两笔卖出: {vol1} + {vol2}")
+                            passorder_live(C, 24, code, price, vol1, "ETF_SELL_TUNE_1")
+                            time.sleep(0.2)
+                            passorder_live(C, 24, code, price, vol2, "ETF_SELL_TUNE_2")
+                        else:
+                            passorder_live(C, 24, code, price, vol_to_sell, "ETF_SELL_TUNE")
 
 def execute_buy_logic(C):
     """
@@ -486,17 +482,17 @@ def execute_buy_logic(C):
                         order_target_value_test(C, code, target_val)
                     else:
                         # 实盘模式：限价买入
-                        # 拆单逻辑：单笔最大委托数量限制
-                        MAX_ORDER_VOL = 900000
-                        remaining_vol = vol_to_buy
-                        
-                        while remaining_vol > 0:
-                            current_order_vol = min(remaining_vol, MAX_ORDER_VOL)
-                            passorder_live(C, 23, code, price, current_order_vol, "ETF_BUY_TUNE")
-                            remaining_vol -= current_order_vol
-                            if remaining_vol > 0:
-                                print(f"大额拆单买入: 本次下单 {current_order_vol}, 剩余 {remaining_vol}")
-                                time.sleep(0.2)
+                        # 简化拆单逻辑：固定分两笔委托
+                        if vol_to_buy >= 200:
+                            vol1 = int(vol_to_buy / 2 / 100) * 100
+                            vol2 = vol_to_buy - vol1
+                            
+                            print(f"分两笔买入: {vol1} + {vol2}")
+                            passorder_live(C, 23, code, price, vol1, "ETF_BUY_TUNE_1")
+                            time.sleep(0.2)
+                            passorder_live(C, 23, code, price, vol2, "ETF_BUY_TUNE_2")
+                        else:
+                            passorder_live(C, 23, code, price, vol_to_buy, "ETF_BUY_TUNE")
 
 def cancel_unfilled_orders(C):
     """撤销当前策略的所有未成交挂单"""
