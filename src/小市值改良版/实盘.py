@@ -619,34 +619,23 @@ class TradingStrategy:
                 fill_data = False,
                 subscribe = True
             )
-            ticksData = context.get_market_data_ex(
-                [],               
-                self.yesterday_HL_list,
-                period="1m",
-                start_time = (context.today - timedelta(days=1)).strftime('%Y%m%d%H%M%S'),
-                end_time = context.today.strftime('%Y%m%d%H%M%S'),
-                count=1,
-                dividend_type = "follow",
-                fill_data = False,
-                subscribe = True
-            )
             print(ticksOfDay, '**持仓涨停票信息-day')
             for stock in self.yesterday_HL_list:
                 try:
-                    # 最新价
-                    price = ticksData[stock]["close"].iloc[-1]
+                    # 最新价 (使用今日日线数据作为当前价)
+                    price = ticksOfDay[stock]["close"].iloc[-1]
                     # 昨日收盘价
                     lastClose = ticksOfDay[stock]["close"].iloc[0]
                     high_limit = self.get_limit_of_stock(stock, lastClose)[0]
 
                     if round(price, 2) < high_limit:
-                        print(f"股票 {stock} 涨停破板，触发卖出操作。")
+                        messager.sendLog(f"股票 {stock} 涨停破板，触发卖出操作。")
                         self.close_position(context, stock)
                         self.reason_to_sell = 'limitup'
                     else:
-                        print(f"股票 {stock} 仍维持涨停状态。")
-                except:
-                    print(f"股票{stock}涨停检查异常, 昨日数据：{ticksOfDay[stock]}, 当前数据：{ticksData[stock]}")
+                        messager.sendLog(f"股票 {stock} 仍维持涨停状态。")
+                except Exception as e:
+                    print(f"股票{stock}涨停检查异常: {e}, 数据详情：{ticksOfDay.get(stock, '无数据')}")
 
     
 
