@@ -4,15 +4,14 @@
 # 回测用的版本
 
 
-from typing import Any, List, Dict, Optional
-from datetime import datetime, timedelta, time
-import numpy as np
+import json
+import time as nativeTime
+import uuid
+from datetime import datetime, time, timedelta
+from typing import Any, Dict, List
+
 import pandas as pd
 import requests
-import json
-import threading
-import uuid
-import time as nativeTime
 
 # 设置账号
 # 腾腾实盘
@@ -325,6 +324,7 @@ class TradingStrategy:
             # 取出涨停列表
             self.yesterday_HL_list = self.find_limit_list(context, self.hold_list)['high_list']
             print("昨日涨停:", self.yesterday_HL_list)
+            messager.sendLog(f"昨日涨停股票: {self.yesterday_HL_list}")
 
     # 【回测时使用】回测初始状态跑一遍当时的市值前200名股票，之后都在这200只里选择，为了优化性能（取市值时只能跑全量最新价格，非常费性能）
     def get_stock_pool_when_test(self, context: Any):
@@ -378,7 +378,7 @@ class TradingStrategy:
                         'lastPrice': ticks[code].iloc[0, 0],
                         'stock_num': stock_num
                         }, ignore_index=True)
-            except Exception as e:
+            except Exception:
                 # continue
                 print(code, ticks[code])
         df_result = df_result.sort_values(by='market_cap', ascending=True)
@@ -889,7 +889,7 @@ class TradingStrategy:
             try:
                 opendate = datetime.strptime(str(context.get_open_date(stock)), "%Y%m%d")
                 return yesterday - opendate < timedelta(days=375)
-            except Exception as e:
+            except Exception:
                 # 取不到数据的股票也是有问题的，可能是已退市，也当成新股过滤掉
                 # print(context.get_open_date(stock), '计算新股出错啦', stock)
                 return True
@@ -1050,7 +1050,7 @@ class TradingStrategy:
         today_str = datetime.fromtimestamp(context.currentTime / 1000).strftime('%m-%d')
         print(today_str)
         if self.pass_april:
-            if ('04-01' <= today_str <= '04-30') or ('01-15' <= today_str <= '01-30'):
+            if ('04-01' <= today_str <= '04-30') or ('01-01' <= today_str <= '01-30'):
                 return True
             else:
                 return False
@@ -1423,7 +1423,7 @@ def orderError_callback(context, orderArgs, errMsg):
     
 def order_callback(context, orderInfo):
     print("委托信息变更回调", context.get_stock_name(strategy.codeOfPosition(orderInfo)))
-    messager.sendLog(f"已委托： " + context.get_stock_name(strategy.codeOfPosition(orderInfo)))
+    messager.sendLog("已委托： " + context.get_stock_name(strategy.codeOfPosition(orderInfo)))
     
 
 

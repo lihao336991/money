@@ -1,0 +1,25 @@
+# ruff.toml
+
+# 声明量化交易平台提供的全局变量，避免 F821 (Undefined name) 报错
+builtins = [
+    "order_target_value",
+    "order_target_percent",
+    "passorder",
+    "get_trade_detail_data",
+    "get_stock_name",
+    "get_instrumentdetail",
+    "cancel_order",
+    "get_trading_dates",
+    "write_file",
+    "read_file",
+    "log",
+    "g",
+    "context",
+    "Context",
+    "messager", # 如果是全局注入的话
+    "C", # 某些平台用 C 代表 Context
+]
+
+# 如果您希望对特定文件完全忽略 F821 检查，可以使用 per-file-ignores
+# [lint.per-file-ignores]
+# "src/小市值改良版/实盘.py" = ["F821"]

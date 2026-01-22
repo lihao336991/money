@@ -1,4 +1,16 @@
 {
     "version": "0.2.0",
-    "configurations": []
+    "configurations": [],
+    "[python]": {
+        // 设置 Ruff 为默认格式化程序
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        // 开启快捷键 Alt+Shift+F 格式化
+        "editor.formatOnSave": false,
+        "editor.codeActionsOnSave": {
+        // 保存时自动修复可修复的 lint 错误（替代 Flake8 手动修改）
+        "source.fixAll.ruff": "explicit",
+        // 保存时自动整理 import 语句顺序
+        "source.organizeImports.ruff": "explicit"
+        }
+    }
 }

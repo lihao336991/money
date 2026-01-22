@@ -1,12 +1,12 @@
 #encoding:gbk
-import pandas as pd
-import numpy as np
-import math
 import datetime
+import math
 import time
+from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
 import requests
-import json
-from datetime import datetime, time as dt_time, timedelta
 
 # ====================================================================
 # 【全局配置】(使用您提供的 ST 策略配置)
@@ -113,15 +113,6 @@ class TaskRunner:
         print(task_func, 'task_func')
         self.daily_tasks.append( (DailyTask(time_str), task_func) )
     
-    def run_weekly(self, weekday, time_str, task_func):
-        """注册每周任务
-        Args:
-            weekday: 0-6 代表周一到周日
-            time_str: 触发时间 "HH:MM"
-            task_func: 任务函数
-        """
-        self.weekly_tasks.append( (WeeklyTask(weekday, time_str), task_func) )
-    
     def check_tasks(self, bar_time):
         """在handlebar中调用检查任务
         Args:
@@ -192,17 +183,31 @@ def codeOfPosition(position):
 
 def passorder_live(C, op_type, code, price, volume, remark):
     """实盘交易下单函数，使用 ST 策略的 passorder 风格"""
+    # 生成唯一订单标识，防止重复单号导致委托失败
+    import random
+    unique_id = f"{remark}_{int(time.time())}_{random.randint(100, 999)}"
+    
+    print(f"【准备下单】Op: {op_type}, Code: {code}, Price: {price}, Vol: {volume}, ID: {unique_id}")
+
     # 假设 23=买入, 24=卖出, 7=限价，5=最新价
     if op_type == 23: # 买入
         try:
-            passorder(23, 1101, C.account_id, code, 5, -1, volume, remark, 1, remark, C)
+            # 1101 表示按股数下单
+            passorder(23, 1101, C.account_id, code, 5, -1, volume, remark, 1, unique_id, C)
+            messager.send_message(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.2f}, 数量: {volume}")
         except Exception as e:
-            print('买入股票(实盘)失败:', e)
+            print(f'买入股票(实盘)失败: {e}')
+            messager.send_message(f"【下单失败】买入 {code} 异常: {e}")
         
     elif op_type == 24: # 卖出
-        passorder(24, 1123, C.account_id, code, 6, price, volume, remark, 1, remark, C)
-
-    messager.send_message(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.2f}, 数量: {volume}")
+        try:
+            # 修正：原代码使用 1123 (按持仓比例)，但传入的是股数 volume。
+            # 应改为 1101 (按股数下单)，与买入保持一致。
+            passorder(24, 1101, C.account_id, code, 6, price, volume, remark, 1, unique_id, C)
+            messager.send_message(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.2f}, 数量: {volume}")
+        except Exception as e:
+            print(f'卖出股票(实盘)失败: {e}')
+            messager.send_message(f"【下单失败】卖出 {code} 异常: {e}")
 
 def order_target_value_test(C, code, target_value):
     """回测模式下按市值调仓 (ST 策略的 order_target_value 风格)"""
@@ -407,6 +412,8 @@ def execute_sell_logic(C):
                 target_vol = int(target_val / price / 100) * 100
                 vol_to_sell = pos_obj.m_nCanUseVolume - target_vol
                 
+                print(f"【卖出检查】{code} 可用: {pos_obj.m_nCanUseVolume}, 目标持仓: {target_vol}, 需卖: {vol_to_sell}, 价格: {price}")
+                
                 if vol_to_sell > 0:
                     messager.send_message(f"【ETF轮动-卖出】{code} 数量: {vol_to_sell}，目标市值: {target_val:.2f}")
                     if C.do_back_test:
@@ -414,8 +421,8 @@ def execute_sell_logic(C):
                         order_target_value_test(C, code, target_val) 
                     else:
                         # 实盘模式：限价卖出
-                        # 简化拆单逻辑：固定分两笔委托
-                        if vol_to_sell >= 200:
+                        # 简化拆单逻辑：超过100万股才分两笔委托
+                        if vol_to_sell >= 1000000:
                             vol1 = int(vol_to_sell / 2 / 100) * 100
                             vol2 = vol_to_sell - vol1
                             
@@ -482,8 +489,8 @@ def execute_buy_logic(C):
                         order_target_value_test(C, code, target_val)
                     else:
                         # 实盘模式：限价买入
-                        # 简化拆单逻辑：固定分两笔委托
-                        if vol_to_buy >= 200:
+                        # 简化拆单逻辑：超过100万股才分两笔委托
+                        if vol_to_buy >= 1000000:
                             vol1 = int(vol_to_buy / 2 / 100) * 100
                             vol2 = vol_to_buy - vol1
                             
@@ -507,7 +514,7 @@ def log_position(C):
     """【健壮性模块 1 延伸：收盘持仓日志】(移植自您的 ST 策略)"""
     positions = get_trade_detail_data(C.account_id, 'STOCK', 'POSITION')
     if positions:
-        print(f"********** 收盘持仓信息打印开始 **********")
+        print("********** 收盘持仓信息打印开始 **********")
         msg = f"【收盘持仓】日期: {C.today.strftime('%Y-%m-%d')}\n"
         for position in positions:
             cost: float = position.m_dOpenPrice
@@ -537,10 +544,6 @@ def get_safe_price(C, code):
         return round(ticksData[code]["close"].iloc[0], 2)
     return 9999
 
-import pandas as pd
-import numpy as np
-import math
-from datetime import datetime
 
 def filter_etf(C):
     scores = []
@@ -677,3 +680,9 @@ def filter_etf(C):
 
     final_list = df_score['code'].head(g.stock_sum).tolist()
     return final_list
+
+
+
+def orderError_callback(context, orderArgs, errMsg):
+    messager.sendLog(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
+    
