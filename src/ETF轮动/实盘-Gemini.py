@@ -286,6 +286,7 @@ def init(C):
         "159550.SZ", # 互联网
         "512710.SH", # 军工
         "159692.SZ", # 证券
+        "562500.SH", # 机器人
     ]
 
     # 判断当前日期是否为周末 (仅实盘需要主动过滤)
@@ -684,5 +685,5 @@ def filter_etf(C):
 
 
 def orderError_callback(context, orderArgs, errMsg):
-    messager.sendLog(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
+    messager.send_message(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
     
