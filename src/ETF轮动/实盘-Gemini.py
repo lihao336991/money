@@ -307,6 +307,7 @@ def init(C):
         # 实盘中使用平台 run_time 接口
         C.run_time("execute_sell_logic","1nDay","2025-12-01 11:00:00","SH")
         C.run_time("execute_buy_logic","1nDay","2025-12-01 11:03:00","SH")
+        C.run_time("filter_etf","1nDay","2025-12-01 14:57:00","SH")
         C.run_time("log_position","1nDay","2025-12-01 15:00:00","SH")
 
     print("策略初始化完成，已设置为分步调仓模式")
@@ -649,8 +650,13 @@ def filter_etf(C):
     df_score = df_score.sort_values(by='score', ascending=False)
     
     if not C.do_back_test:
-        messager.send_message(f"【Top3 预览】: {df_score.head(3).to_dict('records')}, {[C.get_stock_name(code) for code in df_score.head(3)['code']]}")
-    
+        # 格式化输出 所有ETF得分
+        msg = "【得分预览】\n"
+        for _, row in df_score.iterrows():
+            stock_name = C.get_stock_name(row['code'])
+            msg += f"{stock_name} - {row['score']:.3f}\n"
+        messager.send_message(msg)
+        
     print(f"【排查日志-2】计算得到的得分: {df_score}")
     # --- 防抖逻辑 ---
     # 获取当前持仓
