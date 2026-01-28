@@ -490,22 +490,17 @@ def execute_buy_logic(C):
                         # 回测模式：按目标市值调仓
                         order_target_value_test(C, code, target_val)
                     else:
-                        # 实盘模式：限价买入
-                        # 简化拆单逻辑：超过100万股才分两笔委托
-                        if vol_to_buy >= 1000000:
-                            vol1 = int(vol_to_buy / 2 / 100) * 100
-                            vol2 = vol_to_buy - vol1 - 10000 # 这里留2000的buffer
-                            vol3 = 8000
-                            
-                            print(f"分3笔买入: {vol1} + {vol2} + {vol3}")
-                            passorder_live(C, 23, code, price, vol1, "ETF_BUY_TUNE_1")
-                            time.sleep(0.2)
-                            passorder_live(C, 23, code, price, vol2, "ETF_BUY_TUNE_2")
-                            time.sleep(0.2)
-                            passorder_live(C, 23, code, price, vol3, "ETF_BUY_TUNE_3")
-
-                        else:
-                            passorder_live(C, 23, code, price, vol_to_buy, "ETF_BUY_TUNE")
+                        # 实盘模式：限价拆单买入
+                        vol1 = int(vol_to_buy / 2 / 100) * 100
+                        vol2 = vol_to_buy - vol1 - 10000 # 这里留2000的buffer
+                        vol3 = 6000
+                        
+                        print(f"分3笔买入: {vol1} + {vol2} + {vol3}")
+                        passorder_live(C, 23, code, price, vol1, "ETF_BUY_TUNE_1")
+                        time.sleep(0.2)
+                        passorder_live(C, 23, code, price, vol2, "ETF_BUY_TUNE_2")
+                        time.sleep(0.2)
+                        passorder_live(C, 23, code, price, vol3, "ETF_BUY_TUNE_3")
 
 def cancel_unfilled_orders(C):
     """撤销当前策略的所有未成交挂单"""
