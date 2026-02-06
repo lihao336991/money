@@ -7,19 +7,18 @@
 # 作者：O_iX
 
 # 导入函数库
+import math
+
+import numpy as np
 from jqdata import *
-from jqfactor import get_factor_values
-import datetime
-import math, requests
-from scipy.optimize import minimize
-from scipy.linalg import inv
-import uuid
+
+
 # -------------------- 运行调度函数 --------------------
 def initialize(context):
 
     set_option("avoid_future_data", True)  # 打开防未来函数
     set_option("use_real_price", True)  # 开启动态复权模式(真实价格)
-    log.info("初始函数开始运行且全局只运行一次")  # 输出内容到日志 log.info()
+    print("初始函数开始运行且全局只运行一次")  # 输出内容到日志 print()
     log.set_level('order', 'error')
     log.set_level('system', 'error')
     log.set_level('strategy', 'debug')
@@ -52,7 +51,7 @@ def initialize(context):
     g.strategys = {}
     g.portfolio_value_proportion = [1]  # 测试版
     g.positions = {i: {} for i in range(len(g.portfolio_value_proportion))}  # 记录每个子策略的持仓股票
-    
+    g.dynamic_etf_pool = []
     # 全天候权重
     g.weights = {}
 
@@ -60,8 +59,70 @@ def initialize(context):
         run_daily(etf_rotation_adjust, "11:00")
     # 每日剩余资金购买货币ETF
     run_daily(end_trade, "14:59")
+    run_weekly(update_sector_pool, 1, "09:00")
 
+# 每周更新行业动态池的函数
+def update_sector_pool(context):
+    # 1. 获取全量ETF基础列表
+    all_etfs = get_all_securities(['etf']).index.tolist()
+    
+    # 2. 精准过滤：排除宽基、货币、债基、跨境
+    exclude_keywords = ['300', '500', '1000', '50', '上证', '创业板', '科创', '恒生', 'H股', '货币', '纳指', '标普', '债']
+    
+    sector_etfs = []
+    for code in all_etfs:
+        name = get_security_info(code).display_name
+        
+        # 显式逻辑：先假设它是我们要的，只要命中一个黑名单就标记为 False
+        is_sector_etf = True
+        for k in exclude_keywords:
+            if k in name:
+                is_sector_etf = False
+                break  # 命中黑名单，直接跳出当前 ETF 的检查
+        
+        # 只有通过了所有黑名单校验的才加入
+        if is_sector_etf:
+            sector_etfs.append(code)
 
+    if not sector_etfs:
+        print("未找到符合条件的行业ETF")
+        return 
+
+    # 3. 使用 get_price 获取过去5天的成交额 (money)
+    # money 是聚宽标准行情字段，不会报错，回测速度最快
+    end_date = context.previous_date
+    try:
+        # 获取 5 天的成交额数据
+        h = get_price(sector_etfs, count=5, end_date=end_date, frequency='daily', fields=['money'])
+        
+        # 计算 5 日平均成交额，按从大到小排序
+        avg_money = h['money'].mean().sort_values(ascending=False)
+        top_codes = avg_money.index.tolist()
+        
+    except Exception as e:
+        print(f"获取成交额数据出错: {e}")
+        return
+    
+    # 4. 行业去重逻辑
+    final_dynamic_pool = []
+    seen_industries = set()
+    
+    for code in top_codes:
+        name = get_security_info(code).display_name
+        # 取名称前两个字去重（如“半导体”和“半导50”归为一类）
+        industry_key = name[:2] 
+        
+        if industry_key not in seen_industries:
+            final_dynamic_pool.append(code)
+            seen_industries.add(industry_key)
+            
+        # 选出 5 个最热的行业标的
+        if len(final_dynamic_pool) >= 5:
+            break
+            
+    g.dynamic_etf_pool = final_dynamic_pool
+    print(f"【动态更新】本周热点行业池: {[get_security_info(c).display_name for c in g.dynamic_etf_pool]}")
+    
 def process_initialize(context):
     print("重启程序")
     g.strategys = {
@@ -81,7 +142,7 @@ def end_trade(context):
             price = current_data[stock].last_price
             pos = context.portfolio.positions[stock].total_amount
             if my_order(stock, -pos, price, 0):
-                log.info(f"卖出{stock}因送股未记录在持仓中", price, pos)
+                print(f"卖出{stock}因送股未记录在持仓中", price, pos)
 
 def my_order(security, vol, price, target_position):
     o = order(security, vol)
@@ -98,7 +159,7 @@ class Strategy:
         self.context = context
         self.index = index
         self.name = name
-        self.stock_sum = 1
+        self.stock_sum = 3
         self.hold_list = []
         self.min_money = 500  # 最小交易额(限制手续费)
 
@@ -119,7 +180,7 @@ class Strategy:
             "stocks": [{"stock_name": current_data[stock].name, "stock_code": stock, "weight": weight} for stock, weight in targets.items()],
         }
 
-        # log.info(strategy_data)
+        # print(strategy_data)
 
         # 获取已持有列表
         self.hold_list = list(g.positions[self.index].keys())
@@ -155,15 +216,15 @@ class Strategy:
 
         # 检查标的是否停牌、涨停、跌停
         if current_data[security].paused:
-            log.info(f"{security}: 今日停牌")
+            print(f"{security}: 今日停牌")
             return False
 
         if current_data[security].last_price == current_data[security].high_limit:
-            log.info(f"{security}: 当前涨停")
+            print(f"{security}: 当前涨停")
             return False
 
         if current_data[security].last_price == current_data[security].low_limit:
-            log.info(f"{security}: 当前跌停")
+            print(f"{security}: 当前跌停")
             return False
 
         # 获取当前标的的价格
@@ -186,7 +247,7 @@ class Strategy:
         # 检查是否当天买入卖出
         closeable_amount = self.context.portfolio.positions[security].closeable_amount if security in self.context.portfolio.positions else 0
         if adjustment < 0 and closeable_amount == 0:
-            log.info(f"{security}: 当天买入不可卖出")
+            print(f"{security}: 当天买入不可卖出")
             return False
 
         # 下单并更新持仓
@@ -236,6 +297,7 @@ class Etf_Rotation_Strategy(Strategy):
 
         self.stock_sum = 1
         self.etf_pool = [
+            
             # 境外
             "513100.XSHG",  # 纳指ETF
             "513520.XSHG",  # 日经ETF
@@ -245,31 +307,35 @@ class Etf_Rotation_Strategy(Strategy):
             "159980.XSHE",  # 有色ETF
             "159985.XSHE",  # 豆粕ETF
             "501018.XSHG",  # 南方原油
-            # 债券
-            # "511090.XSHG",  # 30年国债ETF
             # 国内
             "513130.XSHG",  # 恒生科技
             "510180.XSHG",
             "159915.XSHE",
-            "512290.XSHG",
             "588120.XSHG",
-            "515070.XSHG",
-            
+        ]
+        self.etf_pool_2 = [
+            # 行业
+            "512290.XSHG",
+            "515070.XSHG",            
             "159851.XSHE",
             "159637.XSHE",
             "159550.XSHE",
             "512710.XSHG",
-            "159692.XSHE",
+            "159692.XSHE"            
         ]
+        # 拼接合并两个数组
+        self.last_etf = self.etf_pool + self.etf_pool_2
         
         self.m_days = 25  # 动量参考天数
 
     def filter(self):
-        data = pd.DataFrame(index=self.etf_pool, columns=["annualized_returns", "r2", "score"])
+        data = pd.DataFrame(index=self.last_etf + g.dynamic_etf_pool, columns=["annualized_returns", "r2", "score"])
         current_data = get_current_data()
-        for etf in self.etf_pool:
+        for etf in self.last_etf + g.dynamic_etf_pool:
             df = attribute_history(etf, self.m_days, "1d", ["close", "high"])
             prices = np.append(df["close"].values, current_data[etf].last_price)
+            
+            # print(etf, 'prices', prices)
 
             # 设置参数
             y = np.log(prices)
@@ -287,18 +353,22 @@ class Etf_Rotation_Strategy(Strategy):
 
             # 计算得分
             data.loc[etf, "score"] = data.loc[etf, "annualized_returns"] * data.loc[etf, "r2"]
+            if etf in self.etf_pool_2 + g.dynamic_etf_pool:
+                data.loc[etf, "score"] -= 1
+                # data.loc[etf, "score"] *= 0.6
 
             # 过滤近3日跌幅超过5%的ETF
-            if min(prices[-1] / prices[-2], prices[-2] / prices[-3], prices[-3] / prices[-4]) < 0.95:
-                data.loc[etf, "score"] = 0
+            # if min(prices[-1] / prices[-2], prices[-2] / prices[-3], prices[-3] / prices[-4]) < 0.95:
+            #     data.loc[etf, "score"] = 0
 
         # 过滤ETF，并按得分降序排列
         data = data.query("0 < score < 6").sort_values(by="score", ascending=False)
-        
+        print(data)
 
         return data.index.tolist()
 
     # 调仓
     def adjust(self):
         targets = self.filter()[: self.stock_sum]
+        print(f"准备调仓: {targets}, 名称", [get_security_info(etf).display_name for etf in targets])
         self._adjust({etf: round(1 / len(targets), 3) for etf in targets})
