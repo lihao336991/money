@@ -782,14 +782,13 @@ class TradingStrategy:
             若为空仓日返回 True，否则返回 False
         """
         today_str = context.current_dt.strftime('%m-%d')
-        # if self.pass_april:
-        #     if ('04-01' <= today_str <= '04-30') or ('01-01' <= today_str <= '01-30'):
-        #         return True
-        #     else:
-        #         return False
-        # else:
-        #     return False
-        return False
+        if self.pass_april:
+            if ('04-01' <= today_str <= '04-30') or ('01-01' <= today_str <= '01-30'):
+                return True
+            else:
+                return False
+        else:
+            return False
 
     def close_account(self, context: Any) -> None:
         """

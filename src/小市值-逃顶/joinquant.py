@@ -1,76 +1,95 @@
+from datetime import datetime
+
+import numpy as np
+import requests
 from jqdata import *
 
+HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618'
+
+# ====================================================================
+# 【健壮性模块 1：消息推送 Messager】
+# 用于企业微信 Webhook 消息通知
+# ====================================================================
+
+class Messager:
+    def __init__(self, hook_url):
+        self.hook_url = hook_url
+        self.is_test = False
+
+    def set_is_test(self, is_test):
+        self.is_test = is_test
+
+    def send_message(self, text_content):
+        if self.is_test:
+            # 回测模式下只打印到日志
+            print(f"【消息推送(测试)】{text_content}")
+            return
+
+        try:
+            # 自动添加时间戳
+            current_time = datetime.now().strftime("[%Y-%m-%d %H:%M:%S] ")
+            content = current_time + text_content
+            
+            payload = {
+                "msgtype": "text",
+                "text": {
+                    "content": content
+                }
+            }
+            # 发送 POST 请求到 Webhook
+            response = requests.post(self.hook_url, json=payload, timeout=5)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            print(f"【消息推送失败】错误: {e}")
+
+messager = Messager(HOOK)
+# 测试模式
+messager.set_is_test(True)
 
 def initialize(context):
     set_option('use_real_price', True)
-    # 设定监测对象
-    g.spot_index = '000852.XSHG'  # 中证1000现货指数
-    g.future_symbol = 'IM'        # 中证1000股指期货代码
+    g.future_symbol = 'IM'
+    g.index_code = '000852.XSHG'
     
-    # 每天 14:45 运行，此时当天的涨跌格局已定，方便尾盘出逃
-    run_daily(record_im_basis, time='14:45')
+    # 存储基差序列的窗口长度
+    g.window = 7
+    g.basis_list = []
 
-def record_im_basis(context):
-  today = context.current_dt.strftime('%Y-%m-%d')
-  
-  # 获取包括今天在内的过去3个交易日
-  trade_days = get_trade_days(end_date=today, count=3)
-  
-  basis_rates = []
-  
-  # 遍历日期计算基差率
-  for date in trade_days:
-      date_str = date.strftime('%Y-%m-%d')
-      
-      # 如果是今天，使用实时数据
-      if date_str == today:
-          main_contract = get_dominant_future(g.future_symbol, date=today)
-          if main_contract:
-              current_data = get_current_data()
-              spot_price = current_data[g.spot_index].last_price
-              future_price = current_data[main_contract].last_price
-              if spot_price > 0:
-                  rate = (future_price / spot_price - 1) * 100
-                  basis_rates.append(rate)
-      else:
-          # 历史数据：获取当时的主力合约和收盘价
-          dom_future = get_dominant_future(g.future_symbol, date=date_str)
-          if dom_future:
-              spot_df = get_price(g.spot_index, end_date=date, count=1, frequency='daily', fields=['close'])
-              future_df = get_price(dom_future, end_date=date, count=1, frequency='daily', fields=['close'])
-              if not spot_df.empty and not future_df.empty:
-                  s_close = spot_df['close'].iloc[0]
-                  f_close = future_df['close'].iloc[0]
-                  if s_close > 0:
-                      rate = (f_close / s_close - 1) * 100
-                      basis_rates.append(rate)
-  
-  if not basis_rates:
-      return False
-      
-  # 计算加权平均
-  # 如果数据不足3天，就用现有的数据平均
-  if len(basis_rates) == 1:
-      avg_rate = basis_rates[0]
-  elif len(basis_rates) == 2:
-      # 昨天 0.4, 今天 0.6
-      avg_rate = basis_rates[0] * 0.4 + basis_rates[1] * 0.6
-  else:
-      # 前天 0.2, 昨天 0.3, 今天 0.5 (或者 1:2:3 加权)
-      # 使用 1:2:3 加权: (r1*1 + r2*2 + r3*3) / 6
-      avg_rate = (basis_rates[0] * 1 + basis_rates[1] * 2 + basis_rates[2] * 3) / 6.0
+    run_daily(record_smoothed_basis, time='14:55')
+    messager.send_message(">>> 小市值-逃顶通知已启动")
+    
 
-  # 4. 绘图与记录
-  record(IM_Basis_Rate = avg_rate)  # 绘制基差率曲线
-  record(Zero_Line = 0)               # 0轴参考线
-  record(Panic_Line = -1.5)           # 恐慌参考线（经验值：贴水超1.5%通常意味着异动）
+def record_smoothed_basis(context):
+    today = context.current_dt.strftime('%Y-%m-%d')
+    # 1. 获取最新基差率 (同前)
+    main_contract = get_dominant_future(g.future_symbol, date=context.current_dt)
+    
+    # 使用 get_current_data 获取实时最新价
+    current_data = get_current_data()
+    spot_p = current_data[g.index_code].last_price
+    future_p = current_data[main_contract].last_price
+    
+    curr_basis_rate = (future_p / spot_p - 1) * 100
+    
+    # 2. 更新序列
+    g.basis_list.append(curr_basis_rate)
+    if len(g.basis_list) > g.window:
+        g.basis_list.pop(0)
+    
+    if len(g.basis_list) < g.window: return
 
-  # 5. 辅助对冲压力计算：计算基差的偏离度
-  # 获取过去 20 天的基差数据，判断当前是否属于“异常贴水”
-  # 此处逻辑可根据需要开启，用于日志报警
-  if basis_rate < -2.0:
-      log.warn(">>> ⚠️ IM基差异常：当前贴水率 %.2f%%，主力合约: %s，对冲压力巨大！" % (basis_rate, main_contract))
- 
+    # 3. 计算加权平均 (WMA)
+    # 权重数组：[1, 2, 3, 4, 5]
+    weights = np.arange(1, len(g.basis_list) + 1)
+    wma_basis = np.sum(np.array(g.basis_list) * weights) / weights.sum()
 
-def handle_data(context, data):
-  pass
+    # 4. 绘图对比
+    record(WMA_Basis = wma_basis)         # 平滑值：更有趋势感
+    record(Zero_Line = 0)
+    record(Panic_Line = -2)
+
+    # 5. 策略应用逻辑
+    # 只有平滑后的基差率跌破 -1.5，才视为真正的“信号确认”
+    if wma_basis < -2:
+        log.warn(">>> ⚠️ [平滑基差报警] 确认持续性贴水加深，当前WMA基差: %.2f" % wma_basis)
+        messager.send_message(">>> ⚠️ [平滑基差报警] 贴水加深，当前WMA基差: %.2f" % wma_basis)
