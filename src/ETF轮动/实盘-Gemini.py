@@ -498,7 +498,8 @@ def execute_buy_logic(C):
                         print(f"分3笔买入: {vol1} + {vol2} + {vol3}")
                         passorder_live(C, 23, code, price, vol1, "ETF_BUY_TUNE_1")
                         time.sleep(0.2)
-                        passorder_live(C, 23, code, price, vol2, "ETF_BUY_TUNE_2")
+                        if vol2 > 0:
+                            passorder_live(C, 23, code, price, vol2, "ETF_BUY_TUNE_2")
                         time.sleep(0.2)
                         passorder_live(C, 23, code, price, vol3, "ETF_BUY_TUNE_3")
 

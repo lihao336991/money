@@ -233,6 +233,20 @@ class Etf_Rotation_Strategy(Strategy):
         super().__init__(context, index, name)
 
         self.stock_sum = 1
+        self.weixing_pool = [
+            "513130.XSHG",  # 恒生科技
+            "510180.XSHG",
+            "159915.XSHE",
+            "512290.XSHG",
+            "588120.XSHG",
+            "515070.XSHG",
+            
+            "159851.XSHE",
+            "159637.XSHE",
+            "159550.XSHE",
+            "512710.XSHG",
+            "159692.XSHE"            
+        ]
         self.etf_pool = [
             
             # 境外
@@ -247,19 +261,8 @@ class Etf_Rotation_Strategy(Strategy):
             # 债券
             # "511090.XSHG",  # 30年国债ETF
             # 国内
-            "513130.XSHG",  # 恒生科技
-            "510180.XSHG",
-            "159915.XSHE",
-            "512290.XSHG",
-            "588120.XSHG",
-            "515070.XSHG",
             
-            "159851.XSHE",
-            "159637.XSHE",
-            "159550.XSHE",
-            "512710.XSHG",
-            "159692.XSHE"
-        ]
+        ] + self.weixing_pool
         
         self.m_days = 25  # 动量参考天数
 
