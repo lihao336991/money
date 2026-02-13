@@ -16,14 +16,14 @@
 运行平台：聚宽
 """
 
-from typing import Any, List, Dict, Optional
-from datetime import datetime, timedelta, time
+from datetime import timedelta
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
 
 # 导入聚宽数据接口和基本面因子库
 from jqdata import *
 from jqfactor import *
-import numpy as np
-import pandas as pd
 
 
 class DataHelper:
