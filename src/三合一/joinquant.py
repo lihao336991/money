@@ -46,27 +46,40 @@ def get_stock_list(context):
     date = context.previous_date
 
     date_2,date_1,date = get_trade_days( end_date=date, count=3)
+    print(f"【选股准备】开始执行选股...")
+    print(f"【选股】基准日期: {date.strftime('%Y%m%d')}")
+    print(f"【选股】日期范围: date={date.strftime('%Y%m%d')}, date_1={date_1.strftime('%Y%m%d')}, date_2={date_2.strftime('%Y%m%d')}")
     # 初始列表
     initial_list = prepare_stock_list(date)
+    print(f"【选股】初步筛选后共 {len(initial_list)} 只股票")
     # 昨日涨停
     hl0_list = get_hl_stock(initial_list, date)
+    # print(f"【选股】get_hl_stock({date.strftime('%Y%m%d')}): 封板股票 {len(hl0_list)}只")
     # 前日曾涨停
     hl1_list = get_ever_hl_stock(initial_list, date_1)
+    # print(f"【选股】get_ever_hl_stock({date_1.strftime('%Y%m%d')}): 曾涨停股票 {len(hl1_list)}只")
     # 前前日曾涨停
     hl2_list = get_ever_hl_stock(initial_list, date_2)
+    # print(f"【选股】get_ever_hl_stock({date_2.strftime('%Y%m%d')}): 曾涨停股票 {len(hl2_list)}只")
     # 合并 hl1_list 和 hl2_list 为一个集合，用于快速查找需要剔除的元素  
     elements_to_remove = set(hl1_list + hl2_list)  
     # 使用列表推导式来剔除 hl_list 中存在于 elements_to_remove 集合中的元素  
     g.gap_up = [stock for stock in hl0_list if stock not in elements_to_remove] 
+    # print(f"【选股】一进二高开: {len(g.gap_up)}只")
     # 昨日涨停，但前天没有涨停的
     g.gap_down = [s for s in hl0_list if s not in hl1_list]
+    # print(f"【选股】首板低开: {len(g.gap_down)}只")
      # 昨日曾涨停
     h1_list = get_ever_hl_stock2(initial_list, date)
+    # print(f"【选股】get_ever_hl_stock2({date.strftime('%Y%m%d')}): 曾涨停未封板 {len(h1_list)}只")
     # 上上个交易日涨停过滤
     elements_to_remove = get_hl_stock(initial_list, date_1)
+    # print(f"【选股】上上个交易日涨停: {len(elements_to_remove)}只")
     
     # 过滤上上个交易日涨停、曾涨停
     g.reversal = [stock for stock in h1_list if stock not in elements_to_remove]
+    # print(f"【选股】弱转强: {len(g.reversal)}只")
+    print(f"【选股准备】选股完成 - 一进二: {len(g.gap_up)}只, 首板低开: {len(g.gap_down)}只, 弱转强: {len(g.reversal)}只")
 
 
 
@@ -82,102 +95,148 @@ def buy(context):
     end_times1 =  ' 09:26:00'
     start = date_now + mid_time1
     end = date_now + end_times1
+    print(f"【买入执行】开始筛选买入标的...")
     # 高开
+    print(f"【买入执行】正在筛选一进二高开标的，共{len(g.gap_up)}只候选")
+    gk_filtered = 0
     for s in g.gap_up:
-        # 条件一：均价，金额，市值，换手率
-        prev_day_data = attribute_history(s, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True)
-        avg_price_increase_value = prev_day_data['money'][0] / prev_day_data['volume'][0] / prev_day_data['close'][0] * 1.1 - 1
-        if avg_price_increase_value < 0.07 or prev_day_data['money'][0] < 5.5e8 or prev_day_data['money'][0] > 20e8 :
-            continue
-        # market_cap 总市值(亿元) > 70亿 流通市值(亿元) < 520亿
-        turnover_ratio_data=get_valuation(s, start_date=context.previous_date, end_date=context.previous_date, fields=['turnover_ratio', 'market_cap','circulating_market_cap'])
-        if turnover_ratio_data.empty or turnover_ratio_data['market_cap'][0] < 70  or turnover_ratio_data['circulating_market_cap'][0] > 520 :
-            continue
+        try:
+            # 条件一：均价，金额，市值，换手率
+            prev_day_data = attribute_history(s, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True)
+            if len(prev_day_data) == 0:
+                gk_filtered += 1
+                continue
+            avg_price_increase_value = prev_day_data['money'][0] / prev_day_data['volume'][0] / prev_day_data['close'][0] * 1.1 - 1
+            if avg_price_increase_value < 0.07 or prev_day_data['money'][0] < 5.5e8 or prev_day_data['money'][0] > 20e8 :
+                gk_filtered += 1
+                continue
+            # market_cap 总市值(亿元) > 70亿 流通市值(亿元) < 520亿
+            turnover_ratio_data=get_valuation(s, start_date=context.previous_date, end_date=context.previous_date, fields=['turnover_ratio', 'market_cap','circulating_market_cap'])
+            if turnover_ratio_data.empty or turnover_ratio_data['market_cap'][0] < 70  or turnover_ratio_data['circulating_market_cap'][0] > 520 :
+                gk_filtered += 1
+                continue
 
-        
-        # 条件二：左压
-        if rise_low_volume(s, context):
-            continue
-        # 条件三：高开,开比
-        auction_data = get_call_auction(s, start_date=date_now, end_date=date_now, fields=['time','volume', 'current'])
-        # log.info(auction_data)
-        if auction_data.empty or auction_data['volume'][0] / prev_day_data['volume'][-1] < 0.03:
-            continue
-        current_ratio = auction_data['current'][0] / (current_data[s].high_limit/1.1)
-        if current_ratio<=1 or current_ratio>=1.06:
-            continue
+            
+            # 条件二：左压
+            if rise_low_volume(s, context):
+                gk_filtered += 1
+                continue
+            # 条件三：高开,开比
+            auction_data = get_call_auction(s, start_date=date_now, end_date=date_now, fields=['time','volume', 'current'])
+            if auction_data.empty:
+                gk_filtered += 1
+                continue
+            volume_ratio = auction_data['volume'][0] / prev_day_data['volume'][-1]
+            if volume_ratio < 0.03:
+                gk_filtered += 1
+                continue
+            current_ratio = auction_data['current'][0] / (current_data[s].high_limit/1.1)
+            if current_ratio<=1 or current_ratio>=1.06:
+                gk_filtered += 1
+                continue
 
-        # 如果股票满足所有条件，则添加到列表中  
-        gk_stocks.append(s)
-        qualified_stocks.append(s)
+            # 如果股票满足所有条件，则添加到列表中  
+            gk_stocks.append(s)
+            qualified_stocks.append(s)
+        except Exception:
+            gk_filtered += 1
+            pass
+    print(f"【买入执行】一进二高开筛选完成: 通过{len(gk_stocks)}只, 过滤{gk_filtered}只")
 
     
     # 低开    
     # 基础信息
     date = transform_date(context.previous_date, 'str')
     current_data = get_current_data()
-    
+    print(f"【买入执行】正在筛选首板低开标的，共{len(g.gap_down)}只候选")
+    dk_filtered = 0
 
     if g.gap_down:
         stock_list = g.gap_down
         # 计算相对位置
         rpd = get_relative_position_df(stock_list, date, 60)
-        rpd = rpd[rpd['rp'] <= 0.5]
-        stock_list = list(rpd.index)
+        if not rpd.empty:
+            rpd = rpd[rpd['rp'] <= 0.5]
+            stock_list = list(rpd.index)
+            print(f"【买入执行】首板低开: 相对位置过滤后剩余{len(stock_list)}只")
         
         # 低开
         df =  get_price(stock_list, end_date=date, frequency='daily', fields=['close'], count=1, panel=False, fill_paused=False, skip_paused=True).set_index('code') if len(stock_list) != 0 else pd.DataFrame()
-        df['open_pct'] = [current_data[s].day_open/df.loc[s, 'close'] for s in stock_list]
-        df = df[(0.955 <= df['open_pct']) & (df['open_pct'] <= 0.97)] #低开越多风险越大，选择3个多点即可
-        stock_list = list(df.index)
-        # send_message(','.join(stock_list))
-        # print(df)
+        if not df.empty:
+            df['open_pct'] = [current_data[s].day_open/df.loc[s, 'close'] for s in stock_list]
+            df = df[(0.955 <= df['open_pct']) & (df['open_pct'] <= 0.97)] #低开越多风险越大，选择3个多点即可
+            stock_list = list(df.index)
 
-        for s in stock_list:
-            prev_day_data = attribute_history(s, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True)
-            if prev_day_data['money'][0] >= 1e8  :
-                dk_stocks.append(s)
-                qualified_stocks.append(s)
-        
+            for s in stock_list:
+                prev_day_data = attribute_history(s, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True)
+                if prev_day_data['money'][0] >= 1e8  :
+                    dk_stocks.append(s)
+                    qualified_stocks.append(s)
+                else:
+                    dk_filtered += 1
+        else:
+            dk_filtered += len(stock_list)
+    print(f"【买入执行】首板低开筛选完成: 通过{len(dk_stocks)}只, 过滤{dk_filtered}只")
+    
     # 弱转强
+    print(f"【买入执行】正在筛选弱转强标的，共{len(g.reversal)}只候选")
+    rzq_filtered = 0
     for s in g.reversal:
-        # 过滤前面三天涨幅超过28%的票
-        price_data = attribute_history(s, 4, '1d', fields=['close'], skip_paused=True)
-        if len(price_data) < 4:
-            continue
-        increase_ratio = (price_data['close'][-1] - price_data['close'][0]) / price_data['close'][0]
-        if increase_ratio > 0.28:
-            continue
-        
-        # 过滤前一日收盘价小于开盘价5%以上的票
-        prev_day_data = attribute_history(s, 1, '1d', fields=['open', 'close'], skip_paused=True)
-        if len(prev_day_data) < 1:
-            continue
-        open_close_ratio = (prev_day_data['close'][0] - prev_day_data['open'][0]) / prev_day_data['open'][0]
-        if open_close_ratio < -0.05:
-            continue
-        
-        prev_day_data = attribute_history(s, 1, '1d', fields=['close', 'volume','money'], skip_paused=True)
-        avg_price_increase_value = prev_day_data['money'][0] / prev_day_data['volume'][0] / prev_day_data['close'][0]  - 1
-        if avg_price_increase_value < -0.04 or prev_day_data['money'][0] < 3e8 or prev_day_data['money'][0] > 19e8:
-            continue
-        turnover_ratio_data = get_valuation(s, start_date=context.previous_date, end_date=context.previous_date, fields=['turnover_ratio','market_cap','circulating_market_cap'])
-        if turnover_ratio_data.empty or turnover_ratio_data['market_cap'][0] < 70  or turnover_ratio_data['circulating_market_cap'][0] > 520 :
-            continue
+        try:
+            # 过滤前面三天涨幅超过28%的票
+            price_data = attribute_history(s, 4, '1d', fields=['close'], skip_paused=True)
+            if len(price_data) < 4:
+                rzq_filtered += 1
+                continue
+            increase_ratio = (price_data['close'][-1] - price_data['close'][0]) / price_data['close'][0]
+            if increase_ratio > 0.28:
+                rzq_filtered += 1
+                continue
+            
+            # 过滤前一日收盘价小于开盘价5%以上的票
+            prev_day_data = attribute_history(s, 1, '1d', fields=['open', 'close'], skip_paused=True)
+            if len(prev_day_data) < 1:
+                rzq_filtered += 1
+                continue
+            open_close_ratio = (prev_day_data['close'][0] - prev_day_data['open'][0]) / prev_day_data['open'][0]
+            if open_close_ratio < -0.05:
+                rzq_filtered += 1
+                continue
+            
+            prev_day_data = attribute_history(s, 1, '1d', fields=['close', 'volume','money'], skip_paused=True)
+            avg_price_increase_value = prev_day_data['money'][0] / prev_day_data['volume'][0] / prev_day_data['close'][0]  - 1
+            if avg_price_increase_value < -0.04 or prev_day_data['money'][0] < 3e8 or prev_day_data['money'][0] > 19e8:
+                rzq_filtered += 1
+                continue
+            turnover_ratio_data = get_valuation(s, start_date=context.previous_date, end_date=context.previous_date, fields=['turnover_ratio','market_cap','circulating_market_cap'])
+            if turnover_ratio_data.empty or turnover_ratio_data['market_cap'][0] < 70  or turnover_ratio_data['circulating_market_cap'][0] > 520 :
+                rzq_filtered += 1
+                continue
 
-        if rise_low_volume(s, context):
-            continue
-        auction_data = get_call_auction(s, start_date=date_now, end_date=date_now, fields=['time','volume', 'current'])
-        
-        if auction_data.empty or auction_data['volume'][0] / prev_day_data['volume'][-1] < 0.03:
-            continue
-        current_ratio = auction_data['current'][0] / (current_data[s].high_limit/1.1)
-        if current_ratio <= 0.98 or current_ratio >= 1.09:
-            continue
-        rzq_stocks.append(s)
-        qualified_stocks.append(s)
+            if rise_low_volume(s, context):
+                rzq_filtered += 1
+                continue
+            auction_data = get_call_auction(s, start_date=date_now, end_date=date_now, fields=['time','volume', 'current'])
+            
+            if auction_data.empty:
+                rzq_filtered += 1
+                continue
+            volume_ratio = auction_data['volume'][0] / prev_day_data['volume'][-1]
+            if volume_ratio < 0.03:
+                rzq_filtered += 1
+                continue
+            current_ratio = auction_data['current'][0] / (current_data[s].high_limit/1.1)
+            if current_ratio <= 0.98 or current_ratio >= 1.09:
+                rzq_filtered += 1
+                continue
+            rzq_stocks.append(s)
+            qualified_stocks.append(s)
+        except Exception:
+            rzq_filtered += 1
+            pass
+    print(f"【买入执行】弱转强筛选完成: 通过{len(rzq_stocks)}只, 过滤{rzq_filtered}只")
     
-    
+    print(f"【买入执行】筛选完成 - 一进二: {len(gk_stocks)}只, 首板低开: {len(dk_stocks)}只, 弱转强: {len(rzq_stocks)}只")
     if len(qualified_stocks)>0:
         print('———————————————————————————————————')
         send_message('今日选股：'+','.join(qualified_stocks))

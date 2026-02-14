@@ -27,11 +27,16 @@ class G():
 
 g = G()
 
+# 股票池缓存
+g.cached_stock_list = None
+g.cached_stock_list_date = None
+
 # 账户配置
 MY_ACCOUNT = "190200026196"
 
 # 企业微信Webhook配置
 HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=2a336b4c-c38e-4ae3-9ff6-f14f175b4f73'
+
 
 def get_shifted_date(C, date, days, days_type='T'):
     """
@@ -227,8 +232,12 @@ def transform_date(date, date_type):
         指定格式的日期
     """
     if isinstance(date, str):
-        str_date = date
-        dt_date = datetime.datetime.strptime(date, '%Y-%m-%d')
+        try:
+            dt_date = datetime.datetime.strptime(date, '%Y-%m-%d')
+            str_date = date
+        except ValueError:
+            dt_date = datetime.datetime.strptime(date, '%Y%m%d')
+            str_date = dt_date.strftime('%Y-%m-%d')
         d_date = dt_date.date()
     elif isinstance(date, datetime.datetime):
         str_date = date.strftime('%Y-%m-%d')
@@ -256,13 +265,24 @@ def filter_new_stock(C, initial_list, date, days=50):
     """
     d_date = transform_date(date, 'd')
     result = []
+    error_count = 0
+    new_stock_count = 0
+    start_time = time.time()
+    
     for stock in initial_list:
         try:
-            opendate = datetime.datetime.strptime(str(C.get_open_date(stock)), "%Y%m%d")
-            if d_date - opendate > datetime.timedelta(days=days):
+            open_date_raw = C.get_open_date(stock)
+            open_date_str = str(open_date_raw)
+            opendate = datetime.datetime.strptime(open_date_str, "%Y%m%d")
+            if d_date - opendate.date() > datetime.timedelta(days=days):
                 result.append(stock)
-        except Exception:
+            else:
+                new_stock_count += 1
+        except Exception as e:
+            error_count += 1
             pass
+    
+    print(f"【选股】filter_new_stock: 基准日期={d_date}, 阈值={days}天, 错误={error_count}只, 新股={new_stock_count}只, 通过={len(result)}只, 耗时 {time.time()-start_time:.1f}秒")
     return result
 
 def filter_st_paused_stock(C, initial_list):
@@ -277,6 +297,8 @@ def filter_st_paused_stock(C, initial_list):
         过滤后的股票列表
     """
     result = []
+    start_time = time.time()
+    
     for stock in initial_list:
         try:
             name = C.get_stock_name(stock)
@@ -284,8 +306,11 @@ def filter_st_paused_stock(C, initial_list):
             is_paused = C.is_suspended_stock(stock)
             if not is_st and not is_paused:
                 result.append(stock)
-        except Exception:
+        except Exception as e:
+            print(f"【选股】filter_st_paused_stock 股票 {stock} 处理异常: {e}")
             pass
+    
+    print(f"【选股】filter_st_paused_stock: 通过 {len(result)}只, 耗时 {time.time()-start_time:.1f}秒")
     return result
 
 def filter_kcbj_stock(stock_list):
@@ -306,6 +331,121 @@ def prepare_stock_list_func(C):
     get_stock_list_func(C)
     print(f"【选股准备】选股完成 - 一进二: {len(g.gap_up)}只, 首板低开: {len(g.gap_down)}只, 弱转强: {len(g.reversal)}只")
 
+def get_market_data_batch(C, initial_list, dates):
+    """
+    批量获取多个日期的行情数据
+    
+    Args:
+        C: 迅投上下文对象
+        initial_list: 股票列表
+        dates: 日期列表
+    
+    Returns:
+        字典，key为日期，value为对应的行情数据
+    """
+    result = {}
+    for date in dates:
+        data = C.get_market_data_ex(
+            ['close', 'high'],
+            initial_list,
+            period="1d",
+            start_time='',
+            end_time=date,
+            count=2,
+            dividend_type="follow",
+            fill_data=False,
+            subscribe=False
+        )
+        result[date] = data
+    return result
+
+def get_hl_stock_from_data(data, date):
+    """
+    从已获取的数据中获取指定日期封板股票（收盘价涨停）
+    
+    Args:
+        data: 行情数据
+        date: 日期（仅用于日志）
+    
+    Returns:
+        封板股票列表
+    """
+    result = []
+    for stock in data:
+        try:
+            df = data[stock]
+            if len(df) < 2:
+                continue
+            last_close = df['close'].iloc[0]
+            close = df['close'].iloc[1]
+            high_limit = get_limit_of_stock(stock, last_close)[0]
+            
+            if round(close, 2) >= round(high_limit, 2):
+                result.append(stock)
+        except Exception as e:
+            print(f"【调试-涨停】{date} {stock}: 错误 {e}")
+            pass
+    return result
+
+def get_ever_hl_stock_from_data(data, date):
+    """
+    从已获取的数据中获取指定日期曾涨停股票（最高价涨停）
+    
+    Args:
+        data: 行情数据
+        date: 日期（仅用于日志）
+    
+    Returns:
+        曾涨停股票列表
+    """
+    result = []
+    for stock in data:
+        try:
+            df = data[stock]
+            if len(df) < 2:
+                continue
+            last_close = df['close'].iloc[0]
+            high = df['high'].iloc[1]
+            high_limit = get_limit_of_stock(stock, last_close)[0]
+            
+            if round(high, 2) >= round(high_limit, 2):
+                result.append(stock)
+        except Exception as e:
+            print(f"【选股】get_ever_hl_stock_from_data 股票 {stock} 处理异常: {e}")
+            pass
+    return result
+
+def get_ever_hl_stock2_from_data(data, date):
+    """
+    从已获取的数据中获取指定日期曾涨停但未封板股票
+    
+    Args:
+        data: 行情数据
+        date: 日期（仅用于日志）
+    
+    Returns:
+        曾涨停但未封板股票列表
+    """
+    result = []
+    for stock in data:
+        try:
+            df = data[stock]
+            if len(df) < 2:
+                continue
+            last_close = df['close'].iloc[0]
+            close = df['close'].iloc[1]
+            high = df['high'].iloc[1]
+            high_limit = get_limit_of_stock(stock, last_close)[0]
+            cd1 = round(high, 2) >= round(high_limit, 2)
+            cd2 = round(close, 2) < round(high_limit, 2)
+            
+            if cd1 and cd2:
+                result.append(stock)
+        except Exception as e:
+            print(f"【选股】get_ever_hl_stock2_from_data 股票 {stock} 处理异常: {e}")
+            pass
+    return result
+
 def get_stock_list_func(C):
     """
     获取三个子策略的股票池
@@ -319,24 +459,112 @@ def get_stock_list_func(C):
         g.reversal: 弱转强股票池
     """
     date = C.yesterday
+    print(f"【选股】基准日期: {date}")
     date_2 = get_shifted_date(C, date, -2, 'T')
     date_1 = get_shifted_date(C, date, -1, 'T')
+    print(f"【选股】日期范围: date={date}, date_1={date_1}, date_2={date_2}")
     
     initial_list = prepare_stock_list(C, date)
     print(f"【选股】初步筛选后共 {len(initial_list)} 只股票")
     
-    hl0_list = get_hl_stock(C, initial_list, date)
-    hl1_list = get_ever_hl_stock(C, initial_list, date_1)
-    hl2_list = get_ever_hl_stock(C, initial_list, date_2)
+    start_time = time.time()
+    print(f"【选股】开始批量获取行情数据...")
+    market_data = get_market_data_batch(C, initial_list, [date, date_1, date_2])
+    elapsed = time.time() - start_time
+    print(f"【选股】批量获取行情数据完成，耗时 {elapsed:.1f}秒")
+
+    hl0_list = get_hl_stock_from_data(market_data[date], date)
+    # print(f"【选股】get_hl_stock({date}): 封板股票 {len(hl0_list)}只")
+    
+    hl1_list = get_ever_hl_stock_from_data(market_data[date_1], date_1)
+    # print(f"【选股】get_ever_hl_stock({date_1}): 曾涨停股票 {len(hl1_list)}只")
+    
+    hl2_list = get_ever_hl_stock_from_data(market_data[date_2], date_2)
+    # print(f"【选股】get_ever_hl_stock({date_2}): 曾涨停股票 {len(hl2_list)}只")
     
     elements_to_remove = set(hl1_list + hl2_list)
     g.gap_up = [stock for stock in hl0_list if stock not in elements_to_remove]
     g.gap_down = [s for s in hl0_list if s not in hl1_list]
+    # print(f"【选股】一进二高开: {len(g.gap_up)}只, 首板低开: {len(g.gap_down)}只")
     
-    h1_list = get_ever_hl_stock2(C, initial_list, date)
-    elements_to_remove = get_hl_stock(C, initial_list, date_1)
+    h1_list = get_ever_hl_stock2_from_data(market_data[date], date)
+    # print(f"【选股】get_ever_hl_stock2({date}): 曾涨停未封板 {len(h1_list)}只")
+    
+    elements_to_remove = get_hl_stock_from_data(market_data[date_1], date_1)
+    # print(f"【选股】get_hl_stock({date_1}): 封板股票 {len(elements_to_remove)}只")
     
     g.reversal = [stock for stock in h1_list if stock not in elements_to_remove]
+    # print(f"【选股】弱转强: {len(g.reversal)}只")
+
+def filter_market_cap(C, initial_list, date, max_cap=500):
+    """
+    过滤市值大于指定值的股票
+    
+    Args:
+        C: 迅投上下文对象
+        initial_list: 股票列表
+        date: 日期
+        max_cap: 最大市值（亿），默认500亿
+    
+    Returns:
+        过滤后的股票列表
+    """
+    result = []
+    if not initial_list:
+        return result
+    
+    start_time = time.time()
+    print(f"【选股】开始市值筛选，目标市值<{max_cap}亿...")
+    
+    try:
+        # 获取收盘价数据
+        ticks = C.get_market_data_ex(
+            ['close'],
+            initial_list,
+            period="1d",
+            start_time='',
+            end_time=date,
+            count=1,
+            dividend_type="follow",
+            fill_data=False,
+            subscribe=False
+        )
+        
+        # 获取财务数据（总股本）
+        end_date = date
+        start_date = get_shifted_date(C, date, -365, 'T')
+        eps = C.get_raw_financial_data(['股本表.总股本'], initial_list, start_date, end_date)
+        
+        for stock in initial_list:
+            try:
+                # 获取总股本
+                stock_num_list = list(eps[stock]['股本表.总股本'].values())
+                if not stock_num_list:
+                    continue
+                stock_num = stock_num_list[-1]
+                
+                # 获取收盘价
+                if stock not in ticks:
+                    continue
+                df = ticks[stock]
+                if df.empty:
+                    continue
+                close = df['close'].iloc[-1]
+                
+                # 计算市值
+                market_cap = close * stock_num / 100000000
+                
+                if market_cap <= max_cap:
+                    result.append(stock)
+            except Exception as e:
+                print(f"【选股】filter_market_cap 股票 {stock} 处理异常: {e}")
+                pass
+    except Exception as e:
+        print(f"【选股】市值筛选异常: {str(e)}")
+    
+    elapsed = time.time() - start_time
+    print(f"【选股】市值筛选完成，通过 {len(result)}只，耗时 {elapsed:.1f}秒")
+    return result
 
 def prepare_stock_list(C, date):
     """
@@ -349,140 +577,29 @@ def prepare_stock_list(C, date):
     Returns:
         过滤后的股票列表
     """
+    if g.cached_stock_list is not None:
+        print(f"【选股】使用缓存的股票池")
+        return g.cached_stock_list
+    
     initial_list = C.get_stock_list_in_sector('沪深A股')
+    print(f"【选股】沪深A股总数: {len(initial_list)}只")
+    
     initial_list = filter_kcbj_stock(initial_list)
+    print(f"【选股】过滤科创板北交所后: {len(initial_list)}只")
+    
     initial_list = filter_new_stock(C, initial_list, date, 50)
+    print(f"【选股】过滤新股后: {len(initial_list)}只")
+    
     initial_list = filter_st_paused_stock(C, initial_list)
+    print(f"【选股】过滤ST停牌后: {len(initial_list)}只")
+    
+    initial_list = filter_market_cap(C, initial_list, date, 300)
+    print(f"【选股】过滤市值后: {len(initial_list)}只")
+    
+    g.cached_stock_list = initial_list
+    g.cached_stock_list_date = date
+    
     return initial_list
-
-def get_hl_stock(C, initial_list, date):
-    """
-    获取指定日期封板股票（收盘价涨停）
-    
-    Args:
-        C: 迅投上下文对象
-        initial_list: 股票列表
-        date: 日期
-    
-    Returns:
-        封板股票列表
-    """
-    result = []
-    if not initial_list:
-        return result
-    
-    data = C.get_market_data_ex(
-        ['close', 'lastClose'],
-        initial_list,
-        period="1d",
-        start_time='',
-        end_time=date,
-        count=2,
-        dividend_type="follow",
-        fill_data=False,
-        subscribe=True
-    )
-    
-    for stock in data:
-        try:
-            df = data[stock]
-            if len(df) < 2:
-                continue
-            last_close = df['lastClose'].iloc[0]
-            close = df['close'].iloc[1]
-            high_limit = get_limit_of_stock(stock, last_close)[0]
-            if round(close, 2) >= round(high_limit, 2):
-                result.append(stock)
-        except Exception:
-            pass
-    return result
-
-def get_ever_hl_stock(C, initial_list, date):
-    """
-    获取指定日期曾涨停股票（最高价涨停）
-    
-    Args:
-        C: 迅投上下文对象
-        initial_list: 股票列表
-        date: 日期
-    
-    Returns:
-        曾涨停股票列表
-    """
-    result = []
-    if not initial_list:
-        return result
-    
-    data = C.get_market_data_ex(
-        ['high', 'lastClose'],
-        initial_list,
-        period="1d",
-        start_time='',
-        end_time=date,
-        count=2,
-        dividend_type="follow",
-        fill_data=False,
-        subscribe=True
-    )
-    
-    for stock in data:
-        try:
-            df = data[stock]
-            if len(df) < 2:
-                continue
-            last_close = df['lastClose'].iloc[0]
-            high = df['high'].iloc[1]
-            high_limit = get_limit_of_stock(stock, last_close)[0]
-            if round(high, 2) >= round(high_limit, 2):
-                result.append(stock)
-        except Exception:
-            pass
-    return result
-
-def get_ever_hl_stock2(C, initial_list, date):
-    """
-    获取指定日期曾涨停但未封板股票
-    
-    Args:
-        C: 迅投上下文对象
-        initial_list: 股票列表
-        date: 日期
-    
-    Returns:
-        曾涨停但未封板股票列表
-    """
-    result = []
-    if not initial_list:
-        return result
-    
-    data = C.get_market_data_ex(
-        ['close', 'high', 'lastClose'],
-        initial_list,
-        period="1d",
-        start_time='',
-        end_time=date,
-        count=2,
-        dividend_type="follow",
-        fill_data=False,
-        subscribe=True
-    )
-    
-    for stock in data:
-        try:
-            df = data[stock]
-            if len(df) < 2:
-                continue
-            last_close = df['lastClose'].iloc[0]
-            close = df['close'].iloc[1]
-            high = df['high'].iloc[1]
-            high_limit = get_limit_of_stock(stock, last_close)[0]
-            cd1 = round(high, 2) >= round(high_limit, 2)
-            cd2 = round(close, 2) < round(high_limit, 2)
-            if cd1 and cd2:
-                result.append(stock)
-        except Exception:
-            pass
-    return result
 
 def rise_low_volume(C, s):
     """
@@ -505,7 +622,7 @@ def rise_low_volume(C, s):
             count=106,
             dividend_type="follow",
             fill_data=False,
-            subscribe=True
+            subscribe=False
         )
         
         if s not in data or data[s].empty:
@@ -531,7 +648,8 @@ def rise_low_volume(C, s):
         if df['volume'].iloc[-1] <= max(volume_slice) * 0.9:
             return True
         return False
-    except Exception:
+    except Exception as e:
+        print(f"【买入】rise_low_volume 股票 {s} 处理异常: {e}")
         return False
 
 def get_relative_position_df(C, stock_list, date, watch_days):
@@ -561,7 +679,7 @@ def get_relative_position_df(C, stock_list, date, watch_days):
             count=watch_days,
             dividend_type="follow",
             fill_data=False,
-            subscribe=True
+            subscribe=False
         )
         
         rp_list = []
@@ -578,13 +696,15 @@ def get_relative_position_df(C, stock_list, date, watch_days):
                 else:
                     rp = (close - low) / (high - low)
                 rp_list.append({'code': code, 'rp': rp})
-            except Exception:
+            except Exception as e:
+                print(f"【买入】get_relative_position_df 股票 {code} 处理异常: {e}")
                 continue
         
         if rp_list:
             result = pd.DataFrame(rp_list).set_index('code')
         return result
-    except Exception:
+    except Exception as e:
+        print(f"【买入】get_relative_position_df 整体异常: {e}")
         return result
 
 def buy_func(C):
@@ -609,6 +729,7 @@ def buy_func(C):
     
     # ========== 一进二高开策略筛选 ==========
     print(f"【买入执行】正在筛选一进二高开标的，共{len(g.gap_up)}只候选")
+    gk_filtered = 0
     for s in g.gap_up:
         try:
             prev_day_data = C.get_market_data_ex(
@@ -620,15 +741,26 @@ def buy_func(C):
                 count=1,
                 dividend_type="follow",
                 fill_data=False,
-                subscribe=True
+                subscribe=False
             )
             
             if s not in prev_day_data or prev_day_data[s].empty:
+                print(f"【一进二过滤】{s} {C.get_stock_name(s)} 无昨日数据")
+                gk_filtered += 1
                 continue
             
             df = prev_day_data[s]
             avg_price_increase_value = df['amount'].iloc[0] / df['volume'].iloc[0] / df['close'].iloc[0] * 1.1 - 1
             if avg_price_increase_value < 0.07 or df['amount'].iloc[0] < 5.5e8 or df['amount'].iloc[0] > 20e8:
+                reason = []
+                if avg_price_increase_value < 0.07:
+                    reason.append(f"平均涨幅{avg_price_increase_value:.2%}<7%")
+                if df['amount'].iloc[0] < 5.5e8:
+                    reason.append(f"成交额{df['amount'].iloc[0]:.2e}<5.5亿")
+                if df['amount'].iloc[0] > 20e8:
+                    reason.append(f"成交额{df['amount'].iloc[0]:.2e}>20亿")
+                # print(f"【一进二过滤】{s} {C.get_stock_name(s)} {', '.join(reason)}")
+                gk_filtered += 1
                 continue
             
             try:
@@ -640,49 +772,76 @@ def buy_func(C):
                         stock_num = stock_num_list[-1]
                 
                 if stock_num <= 0:
+                    # print(f"【一进二过滤】{s} {C.get_stock_name(s)} 股本数量{stock_num}<=0")
+                    gk_filtered += 1
                     continue
                 
                 market_cap = df['close'].iloc[0] * stock_num
                 circulating_market_cap = market_cap
                 
                 if market_cap < 70e8 or circulating_market_cap > 520e8:
+                    reason = []
+                    if market_cap < 70e8:
+                        reason.append(f"市值{market_cap:.2e}<70亿")
+                    if circulating_market_cap > 520e8:
+                        reason.append(f"流通市值{circulating_market_cap:.2e}>520亿")
+                    # print(f"【一进二过滤】{s} {C.get_stock_name(s)} {', '.join(reason)}")
+                    gk_filtered += 1
                     continue
-            except Exception:
+            except Exception as e:
+                print(f"【一进二过滤】{s} {C.get_stock_name(s)} 市值计算异常: {e}")
+                gk_filtered += 1
                 continue
             
             if rise_low_volume(C, s):
+                # print(f"【一进二过滤】{s} {C.get_stock_name(s)} 缩量上涨")
+                gk_filtered += 1
                 continue
             
             auction_data = C.get_market_data_ex(
                 ['open', 'volume'],
                 [s],
-                period="1d",
-                start_time=C.today.strftime('%Y%m%d'),
-                end_time=C.today.strftime('%Y%m%d'),
+                period="1m",
+                start_time=(C.today - datetime.timedelta(days=1)).strftime('%Y%m%d%H%M%S'),
+                end_time=C.today.strftime('%Y%m%d%H%M%S'),
                 count=1,
                 dividend_type="follow",
                 fill_data=False,
-                subscribe=True
+                subscribe=False
             )
             
+            # print(auction_data[s], '竞价数据')
+            # print(df, '昨日数据')
+            
             if s not in auction_data or auction_data[s].empty:
+                # print(f"【一进二过滤】{s} {C.get_stock_name(s)} 无集合竞价数据")
+                gk_filtered += 1
                 continue
             
             if auction_data[s]['volume'].iloc[0] / df['volume'].iloc[0] < 0.03:
+                ratio = auction_data[s]['volume'].iloc[0] / df['volume'].iloc[0]
+                # print(f"【一进二过滤】{s} {C.get_stock_name(s)} 集合竞价量比{ratio:.2%}<3%")
+                gk_filtered += 1
                 continue
             
             current_data = auction_data[s]
-            current_ratio = current_data['open'].iloc[0] / (df['close'].iloc[0] * 1.1)
+            current_ratio = current_data['open'].iloc[0] / df['close'].iloc[0]
             if current_ratio <= 1 or current_ratio >= 1.06:
+                # print(f"【一进二过滤】{s} {C.get_stock_name(s)} 高开比例{current_ratio:.2%}不在(100%, 106%)之间")
+                gk_filtered += 1
                 continue
             
             gk_stocks.append(s)
             qualified_stocks.append(s)
-        except Exception:
+        except Exception as e:
+            print(f"【一进二过滤】{s} {C.get_stock_name(s)} 整体异常: {e}")
+            gk_filtered += 1
             pass
+    print(f"【买入执行】一进二高开筛选完成: 通过{len(gk_stocks)}只, 过滤{gk_filtered}只")
     
     # ========== 首板低开策略筛选 ==========
     print(f"【买入执行】正在筛选首板低开标的，共{len(g.gap_down)}只候选")
+    dk_filtered = 0
     
     if g.gap_down:
         stock_list = g.gap_down
@@ -691,6 +850,9 @@ def buy_func(C):
         if not rpd.empty:
             rpd = rpd[rpd['rp'] <= 0.5]
             stock_list = list(rpd.index)
+            print(f"【买入执行】首板低开: 相对位置过滤后剩余{len(stock_list)}只")
+        else:
+            print(f"【买入执行】首板低开: 相对位置数据为空")
         
         if stock_list:
             df_price = C.get_market_data_ex(
@@ -702,7 +864,7 @@ def buy_func(C):
                 count=1,
                 dividend_type="follow",
                 fill_data=False,
-                subscribe=True
+                subscribe=False
             )
             
             df_open = C.get_market_data_ex(
@@ -714,12 +876,13 @@ def buy_func(C):
                 count=1,
                 dividend_type="follow",
                 fill_data=False,
-                subscribe=True
+                subscribe=False
             )
             
             for s in stock_list:
                 try:
                     if s not in df_price or s not in df_open:
+                        dk_filtered += 1
                         continue
                     close = df_price[s]['close'].iloc[0]
                     open_p = df_open[s]['open'].iloc[0]
@@ -734,16 +897,22 @@ def buy_func(C):
                             count=1,
                             dividend_type="follow",
                             fill_data=False,
-                            subscribe=True
+                            subscribe=False
                         )
                         if s in prev_day_data and prev_day_data[s]['amount'].iloc[0] >= 1e8:
                             dk_stocks.append(s)
                             qualified_stocks.append(s)
-                except Exception:
+                        else:
+                            dk_filtered += 1
+                except Exception as e:
+                    print(f"【买入】首板低开 股票 {s} 处理异常: {e}")
+                    dk_filtered += 1
                     pass
+    print(f"【买入执行】首板低开筛选完成: 通过{len(dk_stocks)}只, 过滤{dk_filtered}只")
     
     # ========== 弱转强策略筛选 ==========
     print(f"【买入执行】正在筛选弱转强标的，共{len(g.reversal)}只候选")
+    rzq_filtered = 0
     for s in g.reversal:
         try:
             price_data = C.get_market_data_ex(
@@ -755,15 +924,17 @@ def buy_func(C):
                 count=4,
                 dividend_type="follow",
                 fill_data=False,
-                subscribe=True
+                subscribe=False
             )
             
             if s not in price_data or len(price_data[s]) < 4:
+                rzq_filtered += 1
                 continue
             
             df = price_data[s]
             increase_ratio = (df['close'].iloc[-1] - df['close'].iloc[0]) / df['close'].iloc[0]
             if increase_ratio > 0.28:
+                rzq_filtered += 1
                 continue
             
             prev_day_data = C.get_market_data_ex(
@@ -775,15 +946,17 @@ def buy_func(C):
                 count=1,
                 dividend_type="follow",
                 fill_data=False,
-                subscribe=True
+                subscribe=False
             )
             
             if s not in prev_day_data:
+                rzq_filtered += 1
                 continue
             
             df_prev = prev_day_data[s]
             open_close_ratio = (df_prev['close'].iloc[0] - df_prev['open'].iloc[0]) / df_prev['open'].iloc[0]
             if open_close_ratio < -0.05:
+                rzq_filtered += 1
                 continue
             
             prev_day_data2 = C.get_market_data_ex(
@@ -795,15 +968,17 @@ def buy_func(C):
                 count=1,
                 dividend_type="follow",
                 fill_data=False,
-                subscribe=True
+                subscribe=False
             )
             
             if s not in prev_day_data2:
+                rzq_filtered += 1
                 continue
             
             df2 = prev_day_data2[s]
             avg_price_increase_value = df2['amount'].iloc[0] / df2['volume'].iloc[0] / df2['close'].iloc[0] - 1
             if avg_price_increase_value < -0.04 or df2['amount'].iloc[0] < 3e8 or df2['amount'].iloc[0] > 19e8:
+                rzq_filtered += 1
                 continue
             
             try:
@@ -815,17 +990,22 @@ def buy_func(C):
                         stock_num = stock_num_list[-1]
                 
                 if stock_num <= 0:
+                    rzq_filtered += 1
                     continue
                 
                 market_cap = df2['close'].iloc[0] * stock_num
                 circulating_market_cap = market_cap
                 
                 if market_cap < 70e8 or circulating_market_cap > 520e8:
+                    rzq_filtered += 1
                     continue
-            except Exception:
+            except Exception as e:
+                print(f"【买入】弱转强 股票 {s} 市值计算异常: {e}")
+                rzq_filtered += 1
                 continue
             
             if rise_low_volume(C, s):
+                rzq_filtered += 1
                 continue
             
             auction_data = C.get_market_data_ex(
@@ -837,23 +1017,29 @@ def buy_func(C):
                 count=1,
                 dividend_type="follow",
                 fill_data=False,
-                subscribe=True
+                subscribe=False
             )
             
             if s not in auction_data or auction_data[s].empty:
+                rzq_filtered += 1
                 continue
             
             if auction_data[s]['volume'].iloc[0] / df2['volume'].iloc[0] < 0.03:
+                rzq_filtered += 1
                 continue
             
-            current_ratio = auction_data[s]['open'].iloc[0] / (df2['close'].iloc[0] * 1.1)
+            current_ratio = auction_data[s]['open'].iloc[0] / df2['close'].iloc[0]
             if current_ratio <= 0.98 or current_ratio >= 1.09:
+                rzq_filtered += 1
                 continue
             
             rzq_stocks.append(s)
             qualified_stocks.append(s)
-        except Exception:
+        except Exception as e:
+            print(f"【买入】弱转强 股票 {s} 整体异常: {e}")
+            rzq_filtered += 1
             pass
+    print(f"【买入执行】弱转强筛选完成: 通过{len(rzq_stocks)}只, 过滤{rzq_filtered}只")
     
     # ========== 输出选股结果 ==========
     print(f"【买入执行】筛选完成 - 一进二: {len(gk_stocks)}只, 首板低开: {len(dk_stocks)}只, 弱转强: {len(rzq_stocks)}只")
@@ -896,7 +1082,7 @@ def buy_func(C):
                         count=1,
                         dividend_type="follow",
                         fill_data=False,
-                        subscribe=True
+                        subscribe=False
                     )
                     
                     if s in tick_data and total_asset / tick_data[s]['close'].iloc[0] > 100:
@@ -907,8 +1093,71 @@ def buy_func(C):
                         print('买入' + s)
                         messager.send_message('买入' + s + ' ' + C.get_stock_name(s))
                         print('———————————————————————————————————')
-                except Exception:
+                except Exception as e:
+                    print(f"【买入】执行买入 股票 {s} 异常: {e}")
                     pass
+
+def print_holdings_func(C):
+    """
+    收盘后打印持仓信息函数
+    
+    Args:
+        C: 迅投上下文对象
+    """
+    print("【收盘持仓】开始打印持仓信息...")
+    positions = get_trade_detail_data(C.account, 'STOCK', 'POSITION')
+    
+    if not positions:
+        print("【收盘持仓】当前无持仓")
+        messager.send_message("今日收盘无持仓")
+        return
+    
+    total_market_value = 0
+    holdings_info = []
+    
+    print("="*80)
+    print(f"【收盘持仓】{C.today.strftime('%Y-%m-%d')} 持仓汇总")
+    print("="*80)
+    print(f"{'股票代码':<15}{'股票名称':<15}{'持仓数量':<12}{'可用数量':<12}{'成本价':<12}{'最新价':<12}{'市值':<15}{'盈亏':<12}")
+    print("-"*80)
+    
+    for position in positions:
+        s = codeOfPosition(position)
+        stock_name = C.get_stock_name(s)
+        hold_volume = position.m_nVolume
+        can_use_volume = position.m_nCanUseVolume
+        avg_cost = position.m_dOpenPrice
+        market_value = position.m_dMarketValue
+        total_market_value += market_value
+        
+        try:
+            tick_data = C.get_market_data_ex(
+                ['close'],
+                [s],
+                period="1d",
+                start_time='',
+                end_time=C.yesterday,
+                count=1,
+                dividend_type="follow",
+                fill_data=False,
+                subscribe=False
+            )
+            last_price = tick_data[s]['close'].iloc[0] if s in tick_data else avg_cost
+            profit = (last_price - avg_cost) * hold_volume if hold_volume > 0 else 0
+        except Exception as e:
+            print(f"【收盘持仓】股票 {s} 获取最新价异常: {e}")
+            last_price = avg_cost
+            profit = 0
+        
+        holdings_info.append(f"{s} {stock_name}")
+        print(f"{s:<15}{stock_name:<15}{hold_volume:<12}{can_use_volume:<12}{avg_cost:<12.2f}{last_price:<12.2f}{market_value:<15.2f}{profit:<12.2f}")
+    
+    print("-"*80)
+    print(f"【收盘持仓】持仓总数: {len(positions)}只, 总市值: {total_market_value:.2f}元")
+    print("="*80)
+    
+    msg = f"今日收盘持仓({len(positions)}只): " + ", ".join(holdings_info)
+    messager.send_message(msg)
 
 def sell_func(C):
     """
@@ -943,7 +1192,7 @@ def sell_func(C):
                 count=1,
                 dividend_type="follow",
                 fill_data=False,
-                subscribe=True
+                subscribe=False
             )
             
             if s not in tick_data:
@@ -961,7 +1210,7 @@ def sell_func(C):
                 count=4,
                 dividend_type="follow",
                 fill_data=False,
-                subscribe=True
+                subscribe=False
             )
             
             high_limit = 0
@@ -998,7 +1247,8 @@ def sell_func(C):
                             print('止损卖出', [s, C.get_stock_name(s)])
                             messager.send_message('止损卖出 ' + C.get_stock_name(s))
                             print('———————————————————————————————————')
-        except Exception:
+        except Exception as e:
+            print(f"【卖出】股票 {s} 处理异常: {e}")
             pass
 
 def init(C):
@@ -1045,16 +1295,18 @@ def init(C):
     # 注册定时任务
     if C.do_back_test:
         print('【初始化】回测模式，注册定时任务')
-        C.runner.run_daily("9:01", prepare_stock_list_func)
+        C.runner.run_daily("9:16", prepare_stock_list_func)
         C.runner.run_daily("09:26", buy_func)
         C.runner.run_daily("11:25", sell_func)
         C.runner.run_daily("14:50", sell_func)
+        C.runner.run_daily("15:00", print_holdings_func)
     else:
         print('【初始化】实盘模式，注册定时任务')
-        C.run_time("prepare_stock_list_func","1nDay","2025-03-01 09:01:00","SH")
+        C.run_time("prepare_stock_list_func","1nDay","2025-03-01 09:16:00","SH")
         C.run_time("buy_func","1nDay","2025-03-01 09:26:00","SH")
         C.run_time("sell_func","1nDay","2025-03-01 11:25:00","SH")
         C.run_time("sell_func","1nDay","2025-03-01 14:50:00","SH")
+        C.run_time("print_holdings_func","1nDay","2025-03-01 15:00:00","SH")
     
     print("【初始化】策略初始化完成")
 

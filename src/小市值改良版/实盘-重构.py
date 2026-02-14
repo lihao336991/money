@@ -924,7 +924,7 @@ class TradingStrategy:
         # 2. 获取数据 (增加 count 以确保对齐后仍有足够窗口)
         price_data = context.get_market_data_ex(
             fields=['close'],
-            stock_list=[main_stock, main_continuous],
+            stock_code=[main_stock, main_continuous],
             period='1d',
             start_time = context.tm.date_str,
             end_time = context.tm.date_str,
