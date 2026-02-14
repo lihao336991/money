@@ -177,6 +177,23 @@ def get_account_money(C):
         money = dt.m_dAvailable
     return money
 
+
+def get_account_total_asset(C):
+    """
+    获取账户总资产
+    
+    Args:
+        C: 迅投上下文对象
+    
+    Returns:
+        总资产金额
+    """
+    accounts = get_trade_detail_data(C.account, 'stock', 'account')
+    total_asset = 0
+    for dt in accounts:
+        total_asset = dt.m_dAsset
+    return total_asset
+
 def open_position_in_test(C, security, value):
     """
     回测模式下开仓
@@ -1107,9 +1124,13 @@ def print_holdings_func(C):
     print("【收盘持仓】开始打印持仓信息...")
     positions = get_trade_detail_data(C.account, 'STOCK', 'POSITION')
     
+    total_asset = get_account_total_asset(C)
+    available_cash = get_account_money(C)
+    
     if not positions:
         print("【收盘持仓】当前无持仓")
-        messager.send_message("今日收盘无持仓")
+        print(f"【收盘持仓】账户总资产: {total_asset:.2f}元, 可用资金: {available_cash:.2f}元")
+        messager.send_message(f"今日收盘无持仓, 账户总资产: {total_asset:.2f}元")
         return
     
     total_market_value = 0
@@ -1117,6 +1138,8 @@ def print_holdings_func(C):
     
     print("="*80)
     print(f"【收盘持仓】{C.today.strftime('%Y-%m-%d')} 持仓汇总")
+    print("="*80)
+    print(f"账户总资产: {total_asset:.2f}元, 可用资金: {available_cash:.2f}元")
     print("="*80)
     print(f"{'股票代码':<15}{'股票名称':<15}{'持仓数量':<12}{'可用数量':<12}{'成本价':<12}{'最新价':<12}{'市值':<15}{'盈亏':<12}")
     print("-"*80)
@@ -1156,7 +1179,7 @@ def print_holdings_func(C):
     print(f"【收盘持仓】持仓总数: {len(positions)}只, 总市值: {total_market_value:.2f}元")
     print("="*80)
     
-    msg = f"今日收盘持仓({len(positions)}只): " + ", ".join(holdings_info)
+    msg = f"今日收盘持仓({len(positions)}只), 账户总资产: {total_asset:.2f}元, 总市值: {total_market_value:.2f}元: " + ", ".join(holdings_info)
     messager.send_message(msg)
 
 def sell_func(C):

@@ -38,6 +38,7 @@ def initialize(context):
     run_daily(buy, '09:26')
     run_daily(sell, time='11:25', reference_security='000300.XSHG')
     run_daily(sell, time='14:50', reference_security='000300.XSHG')
+    run_daily(print_portfolio, '15:00')
 
 
 # 选股
@@ -476,8 +477,39 @@ def sell(context):
                 order_target_value(s, 0)
                 print( '止损卖出', [s,get_security_info(s, date).display_name])
                 print('———————————————————————————————————')  
-                
-                
+
+
+def print_portfolio(context):
+    current_data = get_current_data()
+    positions = context.portfolio.positions
+    
+    print('【收盘持仓】========================================')
+    print(f'总资产: {context.portfolio.total_value:.2f} 元')
+    print(f'可用资金: {context.portfolio.available_cash:.2f} 元')
+    print(f'持仓市值: {context.portfolio.positions_value:.2f} 元')
+    print(f'持仓数量: {len(positions)} 只')
+    print('———————————————————————————————————')
+    
+    if positions:
+        for code, position in positions.items():
+            security_info = get_security_info(code)
+            name = security_info.display_name if security_info else '未知'
+            last_price = current_data[code].last_price
+            avg_cost = position.avg_cost
+            pnl = (last_price - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
+            value = position.value
+            
+            print(f'{code} {name}')
+            print(f'  数量: {position.closeable_amount} 股')
+            print(f'  现价: {last_price:.2f}  成本: {avg_cost:.2f}  盈亏: {pnl:+.2f}%')
+            print(f'  市值: {value:.2f} 元')
+            print('———————————————————————————————————')
+    else:
+        print('当前无持仓')
+    
+    print('【收盘持仓】========================================')
+
+
 # 首版低开策略代码                
 def filter_new_stock2(initial_list, date, days=250):
     d_date = transform_date(date, 'd')
