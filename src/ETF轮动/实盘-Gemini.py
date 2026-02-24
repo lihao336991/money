@@ -289,9 +289,9 @@ def init(C):
         "562500.SH", # 机器人
     ]
 
-    # 判断当前日期是否为周末 (仅实盘需要主动过滤)
-    if not C.do_back_test and datetime.now().weekday() >= 5:
-        print('当前日期为周末，不执行任务')
+    # 判断当前日期是否为非交易日 (仅实盘需要主动过滤)
+    if not C.do_back_test and not is_trading(C):
+        print('当前非交易时间，不执行任务')
         return
 
     # 【实盘/回测环境兼容调度】
@@ -693,3 +693,7 @@ def filter_etf(C):
 def orderError_callback(context, orderArgs, errMsg):
     messager.send_message(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
     
+
+# 前置增加开盘检测
+def is_trading(ContextInfo):
+    return ContextInfo.get_instrumentdetail('600000.SH')['IsTrading'] or ContextInfo.get_instrumentdetail('600036.SH')['IsTrading'] or ContextInfo.get_instrumentdetail('600519.SH')['IsTrading']

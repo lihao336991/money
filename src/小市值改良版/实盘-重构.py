@@ -109,7 +109,7 @@ class TradingStrategy:
     def __init__(self):
         # 策略基础配置和状态变量
         self.no_trading_today_signal: bool = False  # 【慎用！！！快捷平仓选项】当天是否执行空仓（资金再平衡）操作
-        self.pass_april: bool = True                # 是否在04月或01月期间执行空仓策略
+        self.pass_april: bool = False                # 是否在04月或01月期间执行空仓策略
         self.run_stoploss: bool = False              # 是否启用止损策略
 
         # 持仓和调仓记录
@@ -309,7 +309,7 @@ class TradingStrategy:
 
     # 基本面选股：根据国九条，过滤净利润为负且营业收入小于1亿的股票
     def filter_stock_by_gjt(self, context, initial_list):
-        print('开始每周选股环节（基本面初筛） =====================>')
+        print(f'开始每周选股环节（基本面初筛） ===================== ，当前日期为 {context.tm.date_str}，初始股票数量为 {len(initial_list)}')
         
         end_date = context.tm.date_str
         start_date = context.tm.get_past_date(365)
@@ -361,21 +361,25 @@ class TradingStrategy:
                 else:
                     continue
 
-                # 筛选出净利润大于0，营业收入大于1e的股票
-                if finance > 0 and income > 100000000:
+                market_cap = ticks[code].iloc[0, 0] * stock_num
+                # 筛选出净利润大于0，营业收入大于1e，市值小于100e的股票
+                if finance > 0 and income > 100000000 and market_cap / 100000000 < 100:
                     try:
                         # 获取公告日期（key）和统计日期（value）
-                        pub_date = list(eps[code]['利润表.净利润'].keys())[-1]
-                        stat_date = list(eps[code]['利润表.截止日期'].values())[-1] if '利润表.截止日期' in eps[code] and eps[code]['利润表.截止日期'] else '未知'
+                        pub_date_ts = list(eps[code]['利润表.净利润'].keys())[-1]
+                        stat_date_ts = list(eps[code]['利润表.截止日期'].values())[-1] if '利润表.截止日期' in eps[code] and eps[code]['利润表.截止日期'] else '未知'
+                        
+                        # 将时间戳转换为日期字符串
+                        pub_date = datetime.fromtimestamp(pub_date_ts / 1000).strftime('%Y-%m-%d') if isinstance(pub_date_ts, (int, float)) else str(pub_date_ts)
+                        stat_date = datetime.fromtimestamp(stat_date_ts / 1000).strftime('%Y-%m-%d') if isinstance(stat_date_ts, (int, float)) and stat_date_ts != '未知' else str(stat_date_ts)
                         
                         finance_str = f"{finance/100000000:.2f}亿" if abs(finance) > 100000000 else f"{finance/10000:.2f}万"
                         income_str = f"{income/100000000:.2f}亿" if abs(income) > 100000000 else f"{income/10000:.2f}万"
                         
-                        print(f"股票: {code} ({context.get_stock_name(code)}) | 公告日期: {pub_date} | 统计日期: {stat_date} | 净利润: {finance_str} | 营收: {income_str}")
+                        # print(f"股票: {code} ({context.get_stock_name(code)}) | 公告日期: {pub_date} | 统计日期: {stat_date} | 净利润: {finance_str} | 营收: {income_str} | 市值: {market_cap/100000000:.2f}亿")
                     except Exception as e:
                         print(f"打印财务信息出错 {code}: {e}")
 
-                    market_cap = ticks[code].iloc[0, 0] * stock_num
                     df_result = df_result.append({
                         'code': code,
                         'name': context.get_stock_name(code),
@@ -387,6 +391,7 @@ class TradingStrategy:
                 print(f"股票{code}基本面筛查异常: {e}")
 
         df_result = df_result.sort_values(by='market_cap', ascending=True)  
+        print(f"基本面筛选后，股票数量为 {len(df_result)}")
         # 缓存df对象，方便查询某只股票数据
         context.stock_df = df_result
         stock_list = list(df_result.code)
@@ -418,19 +423,30 @@ class TradingStrategy:
             initial_list = self.pool
         else:
             initial_list = self.get_stock_pool(context)
+        
+        print(f"【选股】初始股票池: {len(initial_list)}只")
             
         initial_list = self.filter_kcbj_stock(initial_list)             # 过滤科创/北交股票
+        # print(f"【选股】过滤科创/北交后: {len(initial_list)}只")
         
         # 依次应用过滤器，筛去不符合条件的股票
         initial_list = self.filter_new_stock(context, initial_list)   # 过滤次新股
+        # print(f"【选股】过滤次新股后: {len(initial_list)}只")
+        
         initial_list = self.filter_st_stock(context, initial_list)    # 过滤ST或风险股票
+        # print(f"【选股】过滤ST/风险股后: {len(initial_list)}只")
+        
         initial_list = self.filter_paused_stock(context, initial_list)           # 过滤停牌股票
+        # print(f"【选股】过滤停牌股后: {len(initial_list)}只")
         
         initial_list = self.filter_stock_by_gjt(context, initial_list)             # 过滤净利润为负且营业收入小于1亿的股票
+        # print(f"【选股】过滤财务数据后: {len(initial_list)}只")
         
         initial_list = initial_list[:100]  # 限制数据规模，防止一次处理数据过大
+        
         # 性能不好，回测不开
         initial_list = self.filter_limitup_stock(context, initial_list)   # 过滤当日涨停（未持仓时）的股票
+        
         initial_list = self.filter_limitdown_stock(context, initial_list) # 过滤当日跌停（未持仓时）的股票
         
         # 取前2倍目标持仓股票数作为候选池
@@ -918,19 +934,24 @@ class TradingStrategy:
     def check_escape_top(self, context):
         # 1. 直接获取连续主力合约代码 (规避换月数据断层)
         # 备注：IML0 是中金所 IM 连续主力
-        main_continuous = "IML8.CFE" 
+        main_continuous = 'IM.IF'
         main_stock = '000852.SH'  # 中证1000指数
         
+        stock_list=[main_stock, main_continuous]
         # 2. 获取数据 (增加 count 以确保对齐后仍有足够窗口)
         price_data = context.get_market_data_ex(
-            fields=['close'],
-            stock_code=[main_stock, main_continuous],
-            period='1d',
+            ['close'],
+            stock_list,
+            period='1m',
             start_time = context.tm.date_str,
             end_time = context.tm.date_str,
-            count=g.window + 5 
+            count=g.window + 5,
+            dividend_type = "follow",
+            fill_data = False,
+            subscribe = True
         )
         
+        # print(f"获取到的主力连续数据: {price_data}, 索引数据: {price_data[main_stock]}, 连续数据: {price_data[main_continuous]}")
         if main_stock not in price_data or main_continuous not in price_data:
             return
 
@@ -953,21 +974,27 @@ class TradingStrategy:
         weights = np.arange(1, g.window + 1)
         wma_basis = np.sum(df_merged['basis'].values * weights) / weights.sum()
         curr_basis = df_merged['basis'].iloc[-1]
-        print(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}%")
-        # 如果wma_basis < 2，开始逃顶。当wma_basis > 2时，恢复交易
+        print(f"主力连续: {main_continuous} | 实时基差: {curr_basis} | 7日加权: {wma_basis}")
+        # 如果wma_basis < -2，开始逃顶。当wma_basis > 2时，恢复交易
         
         # 逃顶
-        if wma_basis < 2:
+        if curr_basis < -2:
+            print(f"逃顶: {wma_basis}, {context.storage.getStorage('stop_trade')}")
             if not context.storage.getStorage('stop_trade'):
                 context.storage.setStorage('stop_trade', True)
-                messager.send_message(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}%")
-                messager.send_message("📢📢📢📢📢 重大风险清仓 !!! 📢📢📢📢📢")
-                self.close_account(context)
+                messager.sendLog(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}%")
+                messager.sendLog("📢📢📢📢📢 重大风险清仓 !!! 📢📢📢📢📢")
+                if self.hold_list:
+                    for stock in self.hold_list:
+                        self.close_position(context, stock)
+                        print(f"空仓日平仓，卖出股票 {stock}。")
             
         # 恢复交易
         else:
             if context.storage.getStorage('stop_trade'):
                 context.storage.setStorage('stop_trade', False)
+                messager.sendLog(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}%")
+                messager.sendLog("✅️✅️✅️✅️ 恢复交易 !!!  ✅️✅️✅️✅️")
                 self.weekly_adjustment_select(context)
                 self.weekly_adjustment_buy(context)
 
@@ -1306,7 +1333,7 @@ def orderError_callback(context, orderArgs, errMsg):
 # 【工具类】
 # ==============================================================
 
-def is_trading():
+def is_trading(ContextInfo):
     current_time = datetime.now().time()
     return time(9,0) <= current_time <= time(16,0)
 
@@ -1334,8 +1361,8 @@ class Messager:
             print('消息发送失败')
     # 发送消息（支持控制只在开盘期间推送）
     def sendLog(self, message):
-        if is_trading():
-            self.send_message(self.webhook1, message)
+        # if is_trading():
+        #     self.send_message(self.webhook1, message)
         print(message)
 
     def sendMsg(self, message):

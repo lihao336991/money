@@ -163,7 +163,7 @@ class TradingStrategy:
     def __init__(self):
         # 策略基础配置和状态变量
         self.no_trading_today_signal: bool = False  # 【慎用！！！快捷平仓选项】当天是否执行空仓（资金再平衡）操作
-        self.pass_april: bool = False                # 是否在04月或01月期间执行空仓策略
+        self.pass_april: bool = True                # 是否在04月或01月期间执行空仓策略
         self.run_stoploss: bool = False              # 是否启用止损策略
 
         # 持仓和调仓记录
@@ -1318,9 +1318,8 @@ def init(context: Any):
     # 注册调度任务，所有任务均使用顶层包装函数（不使用 lambda 以确保可序列化）
     
     # 判断当前日期是否为周末，如果是则直接返回
-    current_weekday = datetime.now().weekday()
-    if current_weekday >= 5 and not context.do_back_test:  # 5表示周六，6表示周日
-        print('当前日期为周末，不执行任务')
+    if not context.do_back_test and not is_trading(context):
+        print('当前日期为非交易日，不执行任务')
         return
 
     # 实盘和回测不一样的地方在于，可以使用run_time函数，不需要等到盘中才执行定时逻辑，因此部分逻辑执行时间可以前置
@@ -1414,5 +1413,6 @@ def order_callback(context, orderInfo):
     print("委托信息变更回调", context.get_stock_name(strategy.codeOfPosition(orderInfo)))
     messager.sendLog("已委托： " + context.get_stock_name(strategy.codeOfPosition(orderInfo)))
     
-
-
+# 前置增加开盘检测
+def is_trading(ContextInfo):
+    return ContextInfo.get_instrumentdetail('600000.SH')['IsTrading'] or ContextInfo.get_instrumentdetail('600036.SH')['IsTrading'] or ContextInfo.get_instrumentdetail('600519.SH')['IsTrading']

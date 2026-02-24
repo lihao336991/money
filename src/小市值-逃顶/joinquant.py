@@ -6,45 +6,6 @@ from jqdata import *
 
 HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618'
 
-# ====================================================================
-# 【健壮性模块 1：消息推送 Messager】
-# 用于企业微信 Webhook 消息通知
-# ====================================================================
-
-class Messager:
-    def __init__(self, hook_url):
-        self.hook_url = hook_url
-        self.is_test = False
-
-    def set_is_test(self, is_test):
-        self.is_test = is_test
-
-    def send_message(self, text_content):
-        if self.is_test:
-            # 回测模式下只打印到日志
-            print(f"【消息推送(测试)】{text_content}")
-            return
-
-        try:
-            # 自动添加时间戳
-            current_time = datetime.now().strftime("[%Y-%m-%d %H:%M:%S] ")
-            content = current_time + text_content
-            
-            payload = {
-                "msgtype": "text",
-                "text": {
-                    "content": content
-                }
-            }
-            # 发送 POST 请求到 Webhook
-            response = requests.post(self.hook_url, json=payload, timeout=5)
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            print(f"【消息推送失败】错误: {e}")
-
-messager = Messager(HOOK)
-# 测试模式
-messager.set_is_test(True)
 
 def initialize(context):
     set_option('use_real_price', True)
@@ -56,7 +17,6 @@ def initialize(context):
     g.basis_list = []
 
     run_daily(record_smoothed_basis, time='14:55')
-    messager.send_message(">>> 小市值-逃顶通知已启动")
     
 
 def record_smoothed_basis(context):
@@ -68,6 +28,8 @@ def record_smoothed_basis(context):
     current_data = get_current_data()
     spot_p = current_data[g.index_code].last_price
     future_p = current_data[main_contract].last_price
+
+    print(f"当前日期: {today}, 指数收盘价: {spot_p}, 主力合约收盘价: {future_p}, 最新基差率: {curr_basis_rate:.2f}%")
     
     curr_basis_rate = (future_p / spot_p - 1) * 100
     
@@ -92,4 +54,3 @@ def record_smoothed_basis(context):
     # 只有平滑后的基差率跌破 -1.5，才视为真正的“信号确认”
     if wma_basis < -2:
         log.warn(">>> ⚠️ [平滑基差报警] 确认持续性贴水加深，当前WMA基差: %.2f" % wma_basis)
-        messager.send_message(">>> ⚠️ [平滑基差报警] 贴水加深，当前WMA基差: %.2f" % wma_basis)

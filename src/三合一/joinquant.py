@@ -55,32 +55,49 @@ def get_stock_list(context):
     print(f"【选股】初步筛选后共 {len(initial_list)} 只股票")
     # 昨日涨停
     hl0_list = get_hl_stock(initial_list, date)
-    # print(f"【选股】get_hl_stock({date.strftime('%Y%m%d')}): 封板股票 {len(hl0_list)}只")
+    print(f"【选股】get_hl_stock({date.strftime('%Y%m%d')}): 封板股票 {len(hl0_list)}只， 分别是 {hl0_list}")
     # 前日曾涨停
     hl1_list = get_ever_hl_stock(initial_list, date_1)
-    # print(f"【选股】get_ever_hl_stock({date_1.strftime('%Y%m%d')}): 曾涨停股票 {len(hl1_list)}只")
+    print(f"【选股】get_ever_hl_stock({date_1.strftime('%Y%m%d')}): 曾涨停股票 {len(hl1_list)}只， 分别是 {hl1_list}")
     # 前前日曾涨停
     hl2_list = get_ever_hl_stock(initial_list, date_2)
-    # print(f"【选股】get_ever_hl_stock({date_2.strftime('%Y%m%d')}): 曾涨停股票 {len(hl2_list)}只")
+    print(f"【选股】get_ever_hl_stock({date_2.strftime('%Y%m%d')}): 曾涨停股票 {len(hl2_list)}只， 分别是 {hl2_list}")
     # 合并 hl1_list 和 hl2_list 为一个集合，用于快速查找需要剔除的元素  
     elements_to_remove = set(hl1_list + hl2_list)  
     # 使用列表推导式来剔除 hl_list 中存在于 elements_to_remove 集合中的元素  
+
+    # TODO
     g.gap_up = [stock for stock in hl0_list if stock not in elements_to_remove] 
-    # print(f"【选股】一进二高开: {len(g.gap_up)}只")
+    # g.gap_up = []
+
+    print(f"【选股】一进二高开: {len(g.gap_up)}只")
+
+
+    # TODO 
+    g.gap_down = []
     # 昨日涨停，但前天没有涨停的
-    g.gap_down = [s for s in hl0_list if s not in hl1_list]
-    # print(f"【选股】首板低开: {len(g.gap_down)}只")
+    # g.gap_down = [s for s in hl0_list if s not in hl1_list]
+
+
+    print(f"【选股】首板低开: {len(g.gap_down)}只")
      # 昨日曾涨停
     h1_list = get_ever_hl_stock2(initial_list, date)
-    # print(f"【选股】get_ever_hl_stock2({date.strftime('%Y%m%d')}): 曾涨停未封板 {len(h1_list)}只")
+    print(f"【选股】get_ever_hl_stock2({date.strftime('%Y%m%d')}): 曾涨停未封板 {len(h1_list)}只， 分别是 {h1_list}")
     # 上上个交易日涨停过滤
     elements_to_remove = get_hl_stock(initial_list, date_1)
-    # print(f"【选股】上上个交易日涨停: {len(elements_to_remove)}只")
+    print(f"【选股】上上个交易日涨停: {len(elements_to_remove)}只， 分别是 {elements_to_remove}")
     
     # 过滤上上个交易日涨停、曾涨停
+    # TODO 
     g.reversal = [stock for stock in h1_list if stock not in elements_to_remove]
-    # print(f"【选股】弱转强: {len(g.reversal)}只")
+    # g.reversal = []
+
+    print(f"【选股】弱转强: {len(g.reversal)}只， 分别是 {g.reversal}")
+    print(f"************")
+    print(f"************")
     print(f"【选股准备】选股完成 - 一进二: {len(g.gap_up)}只, 首板低开: {len(g.gap_down)}只, 弱转强: {len(g.reversal)}只")
+    print(f"************")
+    print(f"************")
 
 
 
@@ -106,34 +123,43 @@ def buy(context):
             prev_day_data = attribute_history(s, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True)
             if len(prev_day_data) == 0:
                 gk_filtered += 1
+                print(f"过滤: {s} 无昨收数据")
                 continue
             avg_price_increase_value = prev_day_data['money'][0] / prev_day_data['volume'][0] / prev_day_data['close'][0] * 1.1 - 1
             if avg_price_increase_value < 0.07 or prev_day_data['money'][0] < 5.5e8 or prev_day_data['money'][0] > 20e8 :
                 gk_filtered += 1
+                print(f"过滤: {s} 均价涨幅={avg_price_increase_value:.2%}, 昨收金额={prev_day_data['money'][0]:.2f}，昨收量={prev_day_data['volume'][0]:.2e}，昨收收盘价={prev_day_data['close'][0]:.2f}")
                 continue
             # market_cap 总市值(亿元) > 70亿 流通市值(亿元) < 520亿
             turnover_ratio_data=get_valuation(s, start_date=context.previous_date, end_date=context.previous_date, fields=['turnover_ratio', 'market_cap','circulating_market_cap'])
             if turnover_ratio_data.empty or turnover_ratio_data['market_cap'][0] < 70  or turnover_ratio_data['circulating_market_cap'][0] > 520 :
                 gk_filtered += 1
+                print(f"过滤: {s} 总市值={turnover_ratio_data['market_cap'][0]:.2f}亿, 流通市值={turnover_ratio_data['circulating_market_cap'][0]:.2f}亿")
                 continue
 
             
             # 条件二：左压
             if rise_low_volume(s, context):
                 gk_filtered += 1
+                print(f"过滤: {s} 左压")
                 continue
             # 条件三：高开,开比
             auction_data = get_call_auction(s, start_date=date_now, end_date=date_now, fields=['time','volume', 'current'])
             if auction_data.empty:
                 gk_filtered += 1
+                print(f"过滤: {s} 无集合竞价数据")
                 continue
             volume_ratio = auction_data['volume'][0] / prev_day_data['volume'][-1]
+
+            # 量比：集合竞价量/昨收量
             if volume_ratio < 0.03:
                 gk_filtered += 1
+                print(f"过滤: {s} 量比={volume_ratio:.2%}, 昨收量={prev_day_data['volume'][-1]:.2e}, 集合竞价量={auction_data['volume'][0]:.2e}, 昨收收盘价={prev_day_data['close'][-1]:.2f}")
                 continue
             current_ratio = auction_data['current'][0] / (current_data[s].high_limit/1.1)
             if current_ratio<=1 or current_ratio>=1.06:
                 gk_filtered += 1
+                print(f"过滤: {s} 高开={current_ratio:.2%}")
                 continue
 
             # 如果股票满足所有条件，则添加到列表中  
@@ -354,9 +380,13 @@ def filter_extreme_limit_stock(context, stock_list, date):
 # 每日初始股票池
 def prepare_stock_list(date): 
     initial_list = get_all_securities('stock', date).index.tolist()
+    print(f"【选股】初始股票池共 {len(initial_list)} 只")
     initial_list = filter_kcbj_stock(initial_list)
+    print(f"【选股】过滤科创板、创业板、北交所后共 {len(initial_list)} 只")
     initial_list = filter_new_stock(initial_list, date)
+    print(f"【选股】过滤新股票后共 {len(initial_list)} 只")
     initial_list = filter_st_paused_stock(initial_list)
+    print(f"【选股】过滤停牌股后共 {len(initial_list)} 只")
     return initial_list
 
 
