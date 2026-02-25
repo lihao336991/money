@@ -417,6 +417,7 @@ def get_priority_list(C, hl_list, date):
             print(f"【对比日志】过滤 {s}: 左压缩量")
             continue
             
+        # 将符合条件的股票和其实时数据一起存储
         qualified_stocks.append(s)
         
     log_msg = '可能买入target股票: ' + str([C.get_stock_name(stock) for stock in qualified_stocks])
@@ -492,9 +493,6 @@ def get_stock_list_func(C):
         if round(highs[-3], 2) == round(limit_T_2, 2):
             hl2_list.append(s)
 
-        if '300490.SZ' in s:
-            print(f"查看badcase的数据: {s}, {closes}, {highs}, {limit_T}, {limit_T_1}, {limit_T_2}")
-
     # 合并前两日涨停股票为集合，用于快速查找
     elements_to_remove = set(hl1_list + hl2_list)
     # 筛选出昨日涨停但前两日未涨停的股票（"一进二"模式）
@@ -546,6 +544,7 @@ def buy_func(C):
             count=1, dividend_type="follow", fill_data=False, subscribe=False
         )
         if s not in prev_day_data or prev_day_data[s].empty:
+            print(f"【debug】{s} 无前一日数据")
             continue
         prev_vol = prev_day_data[s]['volume'].iloc[0]
         prev_close = prev_day_data[s]['close'].iloc[0]
@@ -558,11 +557,13 @@ def buy_func(C):
         
         auction_data = C.get_market_data_ex(
             ['open', 'volume', 'amount'], [s], period="1d", start_time=date_now, end_time=date_now,
-            count=1, dividend_type="follow", fill_data=False, subscribe=False
+            count=1, dividend_type="follow", fill_data=False, subscribe=True
         )
         # 注意: 9:25:41时，1d数据的 open, volume 是集合竞价的.
         
+        print(f"【debug】{s} {auction_data}")
         if s not in auction_data or auction_data[s].empty:
+            print(f"【debug】{s} 无集合竞价数据")
             continue
             
         auc_vol = auction_data[s]['volume'].iloc[0]
@@ -588,36 +589,39 @@ def buy_func(C):
             print(f"【买入过滤】{s} 开盘涨幅不符: {current_ratio:.2%}")
             continue
             
-        qualified_stocks.append(s)
+        # 将符合条件的股票和其实时数据一起存储
+        qualified_stocks.append({
+            'code': s,
+            'auction_price': auc_current,
+            'auction_volume': auc_vol,
+            'prev_close': prev_close,
+            'prev_volume': prev_vol
+        })
 
     # 执行买入操作
     total_asset = get_account_total_asset(C)
     available_cash = get_account_money(C) - 500 # 预留500元作为buffer
+
+    messager.send_message(f"【今日买入】{len(qualified_stocks)} 只股票，分别是 {[C.get_stock_name(s['code']) for s in qualified_stocks]}，总金额={available_cash:.2f}")
     
     if len(qualified_stocks) != 0 and available_cash / total_asset > 0.3:
         # 计算每只股票分配的资金
         value = available_cash / len(qualified_stocks)
         
-        # 获取当前最新价用于计算是否够买100股
-        # 使用 auction open price 近似
-        
-        for s in qualified_stocks:
-            # 获取最新tick price
-            tick = C.get_market_data_ex(['close'], [s], period="1m", count=1)
-            if s in tick and not tick[s].empty:
-                current_price = tick[s]['close'].iloc[0]
-            else:
-                continue
-                
+        # 使用每只股票自己的集合竞价价格进行购买
+        for stock_data in qualified_stocks:
+            s = stock_data['code']
+            current_price = stock_data['auction_price']
+            
             # 确保有足够资金买入至少100股
-            if available_cash / current_price > 100:
+            if value / current_price > 100:
                 if C.do_back_test:
                      order_target_value(s, value, C, C.account)
                 else:
                      open_position(C, s, value)
                 
                 print('买入' + s)
-                messager.send_message(f"买入 {s} {C.get_stock_name(s)}, 价格={current_price:.2f}, 金额={value:.2f}")
+                messager.send_message(f"买入 {s} {C.get_stock_name(s)}, 集合竞价价格={stock_data['auction_price']:.2f}, 挂单价格={current_price:.2f}, 金额={value:.2f}")
                 print('———————————————————————————————————')
 
 def sell_func(C):
@@ -746,6 +750,10 @@ def init(C):
         C.run_time("print_holdings_func", "1nDay", "2025-03-01 15:00:00", "SH")
         
     print("【初始化】策略初始化完成")
+
+    # debug 实盘直接运行
+    # get_stock_list_func(C)
+    # buy_func(C)
 
 def handlebar(C):
     """K线处理函数（回测模式使用）"""
