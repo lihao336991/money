@@ -23,13 +23,12 @@ def init(context):
     # 实盘定时任务：每天 14:55 执行
     # if not context.do_back_test:
     # context.run_time("record_smoothed_basis", "1nDay", "2025-01-01 14:55:00", "SH")
-    print(">>> 7日加权基差监控已启动 (纯 Ex 接口版)")
+    print(">>> 7日加权基差监控已启动")
         
     # 初始化时间管理器
     context.tm = TimeManager(context)
     context.runner = TaskRunner(context)
-    context.runner.run_daily("14:55", record_smoothed_basis)
-    record_smoothed_basis(context)
+    context.run_time("record_smoothed_basis","1nDay","2025-03-01 14:55:00","SH")
 
 g.window = 7                # 监控基差 7日窗口
 
