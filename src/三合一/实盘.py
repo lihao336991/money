@@ -206,8 +206,8 @@ def filter_kcbj_stock(stock_list):
 
 def prepare_stock_list(C, date): 
     """准备初始股票池"""
-    if g.cached_stock_list is not None and g.cached_stock_list_date == date:
-        return g.cached_stock_list
+    # if g.cached_stock_list is not None and g.cached_stock_list_date == date:
+    #     return g.cached_stock_list
     
     initial_list = C.get_stock_list_in_sector('沪深A股')
     initial_list = filter_kcbj_stock(initial_list)
@@ -736,18 +736,20 @@ def init(C):
         return
     
     if C.do_back_test:
-        C.runner.run_daily("09:05", get_stock_list_func)
+        C.runner.run_daily("09:10", get_stock_list_func)
         C.runner.run_daily("09:26", buy_func) # 09:25:41 round to 09:26 for backtest bars
         C.runner.run_daily("11:25", sell_func)
         C.runner.run_daily("14:50", sell_func)
         C.runner.run_daily("15:00", print_holdings_func)
     else:
         # 实盘时间
-        C.run_time("get_stock_list_func", "1nDay", "2025-03-01 09:05:00", "SH")
+        C.run_time("get_stock_list_func", "1nDay", "2025-03-01 09:10:00", "SH")
         C.run_time("buy_func", "1nDay", "2025-03-01 09:25:41", "SH")
         C.run_time("sell_func", "1nDay", "2025-03-01 11:25:00", "SH")
         C.run_time("sell_func", "1nDay", "2025-03-01 14:50:00", "SH")
         C.run_time("print_holdings_func", "1nDay", "2025-03-01 15:00:00", "SH")
+
+        # get_stock_list_func(C)
         
     print("【初始化】策略初始化完成")
 
