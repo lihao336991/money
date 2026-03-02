@@ -12,12 +12,14 @@
 - 14:50: 下午卖出 (sell)
 """
 import datetime
+import math
 import time
 import uuid
-import math
+
 import numpy as np
 import pandas as pd
 import requests
+
 
 class G():
     """全局变量存储类"""
@@ -176,28 +178,84 @@ def filter_new_stock(C, initial_list, date, days=50):
     """过滤新股"""
     d_date = transform_date(date, 'd')
     result = []
+    error_count = 0
     for stock in initial_list:
         try:
             open_date_raw = C.get_open_date(stock)
             opendate = datetime.datetime.strptime(str(open_date_raw), "%Y%m%d")
             if d_date - opendate.date() > datetime.timedelta(days=days):
                 result.append(stock)
-        except:
+        except Exception as e:
+            error_count += 1
+            if error_count <= 5: # 只打印前5个错误
+                print(f"【过滤新股】{stock} 异常: {e}")
             pass
+    if error_count > 0:
+        print(f"【过滤新股】总异常数: {error_count}")
     return result
 
 def filter_st_paused_stock(C, initial_list):
     """过滤ST和停牌"""
     result = []
+    error_count = 0
+    name_none_count = 0
+    st_count = 0
+    paused_count = 0
+    
+    st_keywords = ('ST', '*', '退')
+    
+    # 尝试获取ST板块，作为双重过滤参考
+    # st_sector = C.get_stock_list_in_sector('风险警示板') # 部分券商支持
+    # st_sector = set(st_sector) if st_sector else set()
+    
+    print(f"【过滤ST停牌】开始处理 {len(initial_list)} 只股票...")
+    
     for stock in initial_list:
         try:
+            # 获取股票名称
             name = C.get_stock_name(stock)
-            is_st = 'ST' in name or '*' in name or '退' in name
-            is_paused = C.is_suspended_stock(stock)
+            is_st = False
+            
+            if name is None:
+                name_none_count += 1
+                # 如果获取不到名字，保守起见不作为ST过滤，但在日志中标记
+                # 也可以选择根据板块过滤，这里暂时放行
+                is_st = False
+            else:
+                if any(k in name for k in st_keywords):
+                    is_st = True
+                    st_count += 1
+
+            # 获取停牌状态
+            is_paused = False
+            try:
+                is_paused = C.is_suspended_stock(stock)
+                if is_paused:
+                    paused_count += 1
+            except Exception:
+                # 获取停牌状态失败，默认不停牌
+                pass
+            
             if not is_st and not is_paused:
                 result.append(stock)
-        except:
+                
+        except Exception as e:
+            error_count += 1
+            if error_count <= 5:
+                print(f"【过滤ST停牌】{stock} 异常: {e}")
             pass
+            
+    print(f"【过滤ST停牌】完成。ST: {st_count}, 停牌: {paused_count}, 名字缺失: {name_none_count}, 异常: {error_count}")
+    
+    # 兜底逻辑：如果过滤后数量极少（<10）且原本数量很多（>100），可能是数据异常导致全部被杀
+    if len(result) < 10 and len(initial_list) > 100:
+        print(f"【严重警告】过滤后股票仅剩 {len(result)} 只！可能是数据源问题（如名字全部获取失败）。")
+        if name_none_count > len(initial_list) * 0.8:
+            print("【严重警告】超过80%的股票无法获取名称，这表明基础数据未下载或连接异常。")
+            # 在这种情况下，可以考虑不过滤ST，仅保留能获取到的股票
+            # 或者直接返回 initial_list (不推荐，可能会买入ST)
+            # 这里我们不自动恢复，因为买入ST风险很大，但至少日志清晰了。
+            
     return result
 
 def filter_kcbj_stock(stock_list):
@@ -210,9 +268,26 @@ def prepare_stock_list(C, date):
     #     return g.cached_stock_list
     
     initial_list = C.get_stock_list_in_sector('沪深A股')
+    print(f"【选股】沪深A股总数: {len(initial_list)}")
+    
+    if len(initial_list) < 100:
+        print("【选股】'沪深A股'返回数量过少，尝试合并 '上证A股' 和 '深证A股'")
+        try:
+            list_sh = C.get_stock_list_in_sector('上证A股')
+            list_sz = C.get_stock_list_in_sector('深证A股')
+            initial_list = list(set(list_sh + list_sz))
+            print(f"【选股】合并后总数: {len(initial_list)}")
+        except Exception as e:
+            print(f"【选股】备用板块获取失败: {e}")
+
     initial_list = filter_kcbj_stock(initial_list)
+    print(f"【选股】过滤科创北交后: {len(initial_list)}")
+    
     initial_list = filter_new_stock(C, initial_list, date)
+    print(f"【选股】过滤新股后: {len(initial_list)}")
+    
     initial_list = filter_st_paused_stock(C, initial_list)
+    print(f"【选股】过滤ST停牌后: {len(initial_list)}")
     
     g.cached_stock_list = initial_list
     g.cached_stock_list_date = date
@@ -765,7 +840,7 @@ def handlebar(C):
         if C.currentTime < currentTime:
             C.currentTime = currentTime
             C.today = pd.to_datetime(currentTime, unit='ms')
-    except Exception as e:
+    except Exception:
         pass
 
     if (datetime.datetime.now() - datetime.timedelta(days=1) > C.today) and not C.do_back_test:
