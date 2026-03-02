@@ -579,6 +579,7 @@ def get_stock_list_func(C):
     print(f'hl2_list: {hl2_list}')
     
     print(f"【对比日志】一进二初选: {len(hl_list)}, 列表: {hl_list}")
+    messager.send_message(f"一进二初选: {len(hl_list)}")
 
     # 计算昨日涨停情绪因子
     yesterday_high_limit_factor = get_high_limit_factor(C, initial_list, date)
@@ -586,6 +587,7 @@ def get_stock_list_func(C):
     last_high_limit_factor = get_high_limit_factor(C, initial_list, date_1)
     
     print(f"【对比日志】情绪因子: 昨日={yesterday_high_limit_factor:.4f}, 前日={last_high_limit_factor:.4f}")
+    messager.send_message(f"情绪因子: 昨日={yesterday_high_limit_factor:.4f}, 前日={last_high_limit_factor:.4f}")
     
     # 情绪退潮判断（昨日因子下降超过10%）
     # if last_high_limit_factor == 0 or yesterday_high_limit_factor / last_high_limit_factor < 0.9:
