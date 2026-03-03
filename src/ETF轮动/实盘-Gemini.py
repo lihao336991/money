@@ -630,8 +630,13 @@ def filter_etf(C):
                 score = 0
                 if not C.do_back_test: print(f" > 过滤: {etf} 触发暴跌保护")
 
+            # 过滤近2日涨幅均超过8%的ETF（乖离太大，避免极端行情追高）
+            if max(drop_1, drop_2) > 1.08:
+                score = 0
+                if not C.do_back_test: print(f" > 过滤: {etf} 触发涨幅过大保护")
+
         # 6. 加入候选列表
-        if 0 < score < 6:
+        if 0 < score < 5:
             scores.append({'code': etf, 'score': score})
         else:
             print(f" > 过滤: {etf} 得分异常 ({score:.4f})")
