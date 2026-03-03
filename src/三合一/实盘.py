@@ -813,20 +813,18 @@ def init(C):
         return
     
     if C.do_back_test:
-        C.runner.run_daily("09:10", get_stock_list_func)
+        C.runner.run_daily("09:16", get_stock_list_func)
         C.runner.run_daily("09:26", buy_func) # 09:25:41 round to 09:26 for backtest bars
         C.runner.run_daily("11:25", sell_func)
         C.runner.run_daily("14:50", sell_func)
         C.runner.run_daily("15:00", print_holdings_func)
     else:
         # 实盘时间
-        C.run_time("get_stock_list_func", "1nDay", "2025-03-01 09:10:00", "SH")
+        C.run_time("get_stock_list_func", "1nDay", "2025-03-01 09:16:00", "SH")
         C.run_time("buy_func", "1nDay", "2025-03-01 09:25:41", "SH")
         C.run_time("sell_func", "1nDay", "2025-03-01 11:25:00", "SH")
         C.run_time("sell_func", "1nDay", "2025-03-01 14:50:00", "SH")
         C.run_time("print_holdings_func", "1nDay", "2025-03-01 15:00:00", "SH")
-
-        # get_stock_list_func(C)
         
     print("【初始化】策略初始化完成")
 
