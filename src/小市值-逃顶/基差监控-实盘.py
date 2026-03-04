@@ -490,7 +490,7 @@ class Messager:
 messager = Messager()
 
 
-def is_trading(ContextInfo):
+def is_trading():
     current_time = datetime.now().time()
     return time(9,0) <= current_time <= time(16,0)
 
