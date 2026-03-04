@@ -1,7 +1,5 @@
-from datetime import datetime
 
 import numpy as np
-import requests
 from jqdata import *
 
 HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618'
@@ -9,8 +7,8 @@ HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-
 
 def initialize(context):
     set_option('use_real_price', True)
-    g.future_symbol = 'IC'
-    g.index_code = '000905.XSHG'
+    g.future_symbol = 'IM'
+    g.index_code = '000852.XSHG'
     
     # 存储基差序列的窗口长度
     g.window = 7
@@ -28,6 +26,7 @@ def record_smoothed_basis(context):
     current_data = get_current_data()
     spot_p = current_data[g.index_code].last_price
     future_p = current_data[main_contract].last_price
+
     print(f"当前日期: {today}, 指数收盘价: {spot_p}, 主力合约收盘价: {future_p}, 最新基差率: {curr_basis_rate:.2f}%")
     
     curr_basis_rate = (future_p / spot_p - 1) * 100

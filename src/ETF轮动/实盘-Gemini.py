@@ -1,6 +1,9 @@
 #encoding:gbk
 import datetime
+import logging
 import math
+import os
+import sys
 import time
 from datetime import datetime, timedelta
 
@@ -30,6 +33,10 @@ g.today_target_positions = {}
 ACCOUNT = '190200026196'
 
 HOOK = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=599439e6-4132-48b6-a05a-c1fbb32e33d8'
+# 日志存储路径
+LOG_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "QMT_Logs")# 检查并创建目录（如果不存在）
+if not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR)
 
 # ====================================================================
 # 【健壮性模块 1：消息推送 Messager】
@@ -47,7 +54,7 @@ class Messager:
     def send_message(self, text_content):
         if self.is_test:
             # 回测模式下只打印到日志
-            print(f"【消息推送(测试)】{text_content}")
+            log.info(f"【消息推送(测试)】{text_content}")
             return
 
         try:
@@ -65,7 +72,7 @@ class Messager:
             response = requests.post(self.hook_url, json=payload, timeout=5)
             response.raise_for_status()
         except requests.exceptions.RequestException as e:
-            print(f"【消息推送失败】错误: {e}")
+            log.error(f"【消息推送失败】错误: {e}")
 
 messager = Messager(HOOK)
 
@@ -110,7 +117,7 @@ class TaskRunner:
             time_str: 触发时间 "HH:MM"
             task_func: 任务函数
         """
-        print(task_func, 'task_func')
+        log.info(f"注册每日任务: {task_func.__name__} at {time_str}")
         self.daily_tasks.append( (DailyTask(time_str), task_func) )
     
     def check_tasks(self, bar_time):
@@ -168,7 +175,7 @@ def get_shifted_date(C, date_str, days, days_type='T'):
             return (base_date + timedelta(days=days)).strftime("%Y%m%d")
             
     except Exception as e:
-        print(f"【日期偏移】错误: {str(e)}，使用自然日偏移作为备用")
+        log.error(f"【日期偏移】错误: {str(e)}，使用自然日偏移作为备用")
         return (datetime.now().date() + timedelta(days=days)).strftime("%Y%m%d")
 
 def get_previous_trading_day(C, current_date):
@@ -187,16 +194,16 @@ def passorder_live(C, op_type, code, price, volume, remark):
     import random
     unique_id = f"{remark}_{int(time.time())}_{random.randint(100, 999)}"
     
-    print(f"【准备下单】Op: {op_type}, Code: {code}, Price: {price}, Vol: {volume}, ID: {unique_id}")
+    log.info(f"【准备下单】Op: {op_type}, Code: {code}, Price: {price}, Vol: {volume}, ID: {unique_id}")
 
     # 假设 23=买入, 24=卖出, 7=限价，5=最新价
     if op_type == 23: # 买入
         try:
             # 1101 表示按股数下单
             passorder(23, 1101, C.account_id, code, 5, -1, volume, remark, 1, unique_id, C)
-            messager.send_message(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.2f}, 数量: {volume}")
+            messager.send_message(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.3f}, 数量: {volume}")
         except Exception as e:
-            print(f'买入股票(实盘)失败: {e}')
+            log.error(f'买入股票(实盘)失败: {e}')
             messager.send_message(f"【下单失败】买入 {code} 异常: {e}")
         
     elif op_type == 24: # 卖出
@@ -204,20 +211,20 @@ def passorder_live(C, op_type, code, price, volume, remark):
             # 修正：原代码使用 1123 (按持仓比例)，但传入的是股数 volume。
             # 应改为 1101 (按股数下单)，与买入保持一致。
             passorder(24, 1101, C.account_id, code, 6, price, volume, remark, 1, unique_id, C)
-            messager.send_message(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.2f}, 数量: {volume}")
+            messager.send_message(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.3f}, 数量: {volume}")
         except Exception as e:
-            print(f'卖出股票(实盘)失败: {e}')
+            log.error(f'卖出股票(实盘)失败: {e}')
             messager.send_message(f"【下单失败】卖出 {code} 异常: {e}")
 
 def order_target_value_test(C, code, target_value):
     """回测模式下按市值调仓 (ST 策略的 order_target_value 风格)"""
-    print(f"【回测交易】{code} 调仓目标市值: {target_value:.2f}")
+    log.info(f"【回测交易】{code} 调仓目标市值: {target_value:.3f}")
     # 在实际回测平台中，应调用 C.order_target_value(code, target_value)
     order_target_value(code, target_value, C, C.account_id)
 
 def cancel(order_id, account, asset_type):
     """撤单函数"""
-    print(f"【交易操作】撤销订单: {order_id}")
+    log.info(f"【交易操作】撤销订单: {order_id}")
     cancel_order(order_id, account, asset_type)
 
 # 获取当前账户可用金额
@@ -256,7 +263,7 @@ def init(C):
     # 注册任务调度器和消息推送
     C.runner = TaskRunner(C)
     messager.set_is_test(C.do_back_test)
-    print(f"当前运行模式: {'回测' if C.do_back_test else '实盘'}")
+    log.info(f"当前运行模式: {'回测' if C.do_back_test else '实盘'}")
     
     # 初始化时间戳
     C.currentTime = 0
@@ -291,26 +298,26 @@ def init(C):
 
     # 判断当前日期是否为非交易日 (仅实盘需要主动过滤)
     if not C.do_back_test and not is_trading(C):
-        print('当前非交易时间，不执行任务')
+        log.info('当前非交易时间，不执行任务')
         return
 
     # 【实盘/回测环境兼容调度】
     if C.do_back_test:
-        print('doing test - 注册回测任务')
+        log.info('doing test - 注册回测任务')
         # 回测中使用 TaskRunner 的精确时间模拟
         C.runner.run_daily("11:00", execute_sell_logic)
         C.runner.run_daily("11:05", execute_buy_logic)
         C.runner.run_daily("14:59", log_position)
         
     else:
-        print('doing live - 注册实盘任务')
+        log.info('doing live - 注册实盘任务')
         # 实盘中使用平台 run_time 接口
         C.run_time("execute_sell_logic","1nDay","2025-12-01 11:00:00","SH")
         C.run_time("execute_buy_logic","1nDay","2025-12-01 11:03:00","SH")
         C.run_time("filter_etf","1nDay","2025-12-01 14:57:00","SH")
         C.run_time("log_position","1nDay","2025-12-01 15:00:00","SH")
 
-    print("策略初始化完成，已设置为分步调仓模式")
+    log.info("策略初始化完成，已设置为分步调仓模式")
     
 
 def handlebar(C):
@@ -327,7 +334,7 @@ def handlebar(C):
             C.today = pd.to_datetime(currentTime, unit='ms')
             C.now = pd.to_datetime(currentTime, unit='ms')
     except Exception as e:
-        print('handlebar异常', currentTime, e)
+        log.error(f'handlebar异常: {currentTime}, {e}')
 
     if (datetime.now() - timedelta(days=1) > C.today) and not C.do_back_test:
         # print('非回测模式，历史不处理')
@@ -356,12 +363,12 @@ def execute_sell_logic(C):
     第一阶段：计算信号 并 执行卖出
     """
     current_time = C.now
-    print(f"[{current_time}] 阶段1: 开始计算信号并执行卖出...")
+    log.info(f"[{current_time}] 阶段1: 开始计算信号并执行卖出...")
     messager.send_message(f"【ETF轮动-信号计算】开始执行卖出逻辑 @ {current_time}")
     
     # 1. 筛选目标ETF
     target_list = filter_etf(C)
-    print("今日选中目标:", target_list)
+    log.info(f"今日选中目标: {target_list}")
     messager.send_message(f"【ETF轮动-信号计算】今日选中目标: {target_list}, {[C.get_stock_name(code) for code in target_list]}")
     
     # 2. 计算目标持仓金额
@@ -369,7 +376,7 @@ def execute_sell_logic(C):
     # 使用策略专用资产计算（扣除手动持仓）
     strategy_asset = get_strategy_asset(C)
 
-    print(f"当前账户总资产: {get_total_asset(C):.2f}, 策略可用资产: {strategy_asset:.2f}")
+    log.info(f"当前账户总资产: {get_total_asset(C):.3f}, 策略可用资产: {strategy_asset:.3f}")
     
     if strategy_asset > 0 and target_list:
         per_value = strategy_asset / len(target_list)
@@ -377,12 +384,12 @@ def execute_sell_logic(C):
             target_positions[code] = per_value
     
     g.today_target_positions = target_positions
-    print("今日目标持仓:", target_positions)
+    log.info(f"今日目标持仓: {target_positions}")
     
     # 3. 执行卖出操作
     positions = get_trade_detail_data(C.account_id, 'stock', 'position')
     hold_list = [codeOfPosition(position) for position in positions if position.m_dMarketValue > 10000]
-    print("当前有仓位的持仓:", hold_list)
+    log.info(f"当前有仓位的持仓: {hold_list}")
     
     current_holdings = {obj.m_strInstrumentID + '.' + obj.m_strExchangeID: obj for obj in positions}
     # 如果已经持仓，且持仓比例不小于目标持仓比例，不需要执行后续逻辑
@@ -390,11 +397,11 @@ def execute_sell_logic(C):
     for code in list(current_holdings.keys()):
         # 忽略不在ETF池中的手动持仓
         if code not in C.etf_pool:
-            print(f"{code} 非策略标的(手动持仓)，忽略")
+            log.info(f"{code} 非策略标的(手动持仓)，忽略")
             continue
 
         if code in target_list: 
-            print(f"{code} 继续持仓")
+            log.info(f"{code} 继续持仓")
             continue
 
         pos_obj = current_holdings[code]
@@ -414,10 +421,10 @@ def execute_sell_logic(C):
                 target_vol = int(target_val / price / 100) * 100
                 vol_to_sell = pos_obj.m_nCanUseVolume - target_vol
                 
-                print(f"【卖出检查】{code} 可用: {pos_obj.m_nCanUseVolume}, 目标持仓: {target_vol}, 需卖: {vol_to_sell}, 价格: {price}")
+                log.info(f"【卖出检查】{code} 可用: {pos_obj.m_nCanUseVolume}, 目标持仓: {target_vol}, 需卖: {vol_to_sell}, 价格: {price}")
                 
                 if vol_to_sell > 0:
-                    messager.send_message(f"【ETF轮动-卖出】{code} 数量: {vol_to_sell}，目标市值: {target_val:.2f}")
+                    messager.send_message(f"【ETF轮动-卖出】{code} 数量: {vol_to_sell}，目标市值: {target_val:.3f}")
                     if C.do_back_test:
                         # 回测模式：按目标市值调仓
                         order_target_value_test(C, code, target_val) 
@@ -428,7 +435,7 @@ def execute_sell_logic(C):
                             vol1 = int(vol_to_sell / 2 / 100) * 100
                             vol2 = vol_to_sell - vol1
                             
-                            print(f"分两笔卖出: {vol1} + {vol2}")
+                            log.info(f"分两笔卖出: {vol1} + {vol2}")
                             passorder_live(C, 24, code, price, vol1, "ETF_SELL_TUNE_1")
                             time.sleep(0.2)
                             passorder_live(C, 24, code, price, vol2, "ETF_SELL_TUNE_2")
@@ -440,7 +447,7 @@ def execute_buy_logic(C):
     第二阶段：执行买入
     """
     current_time = datetime.now().strftime("%H:%M:%S")
-    print(f"[{current_time}] 阶段2: 资金应已回笼，开始执行买入...", g.today_target_positions)
+    log.info(f"[{current_time}] 阶段2: 资金应已回笼，开始执行买入... {g.today_target_positions}")
     messager.send_message(f"【ETF轮动-交易】开始执行买入逻辑 @ {current_time}")
     
     target_positions = g.today_target_positions
@@ -461,7 +468,7 @@ def execute_buy_logic(C):
     strategy_asset = get_strategy_asset(C)
     target_list = list(target_positions.keys())
     per_value = strategy_asset / len(target_list) if target_list else 0
-    print(f"买入阶段重新计算: 策略总资产={strategy_asset:.2f}, 单标的={per_value:.2f}")
+    log.info(f"买入阶段重新计算: 策略总资产={strategy_asset:.3f}, 单标的={per_value:.3f}")
 
     for code in target_list:
         target_val = per_value - 1000 # 留1000块buffer，防止资金不足
@@ -485,7 +492,7 @@ def execute_buy_logic(C):
                 vol_to_buy = target_vol_total - current_vol
                 
                 if vol_to_buy > 0:
-                    messager.send_message(f"【ETF轮动-买入】{code} 数量: {vol_to_buy}，目标市值: {target_val:.2f}")
+                    messager.send_message(f"【ETF轮动-买入】{code} 数量: {vol_to_buy}，目标市值: {target_val:.3f}")
                     if C.do_back_test:
                         # 回测模式：按目标市值调仓
                         order_target_value_test(C, code, target_val)
@@ -495,7 +502,7 @@ def execute_buy_logic(C):
                         vol2 = vol_to_buy - vol1 - 10000 # 这里留2000的buffer
                         vol3 = 6000
                         
-                        print(f"分3笔买入: {vol1} + {vol2} + {vol3}")
+                        log.info(f"分3笔买入: {vol1} + {vol2} + {vol3}")
                         passorder_live(C, 23, code, price, vol1, "ETF_BUY_TUNE_1")
                         time.sleep(0.2)
                         if vol2 > 0:
@@ -510,23 +517,23 @@ def cancel_unfilled_orders(C):
         # 48=未报, 49=待报, 50=已报, 51=已报待撤, 52=部成, 53=部成待撤
         if order.m_nOrderStatus in [48, 49, 50, 52]: 
              cancel(order.m_strOrderID, C.account_id, 'stock')
-             print(f"撤销未成交订单: {order.m_strInstrumentID}")
+             log.info(f"撤销未成交订单: {order.m_strInstrumentID}")
 
 def log_position(C):
     """【健壮性模块 1 延伸：收盘持仓日志】(移植自您的 ST 策略)"""
     positions = get_trade_detail_data(C.account_id, 'STOCK', 'POSITION')
     if positions:
-        print("********** 收盘持仓信息打印开始 **********")
+        log.info("********** 收盘持仓信息打印开始 **********")
         msg = f"【收盘持仓】日期: {C.today.strftime('%Y-%m-%d')}\n"
         for position in positions:
             cost: float = position.m_dOpenPrice
             price: float = position.m_dLastPrice
             value: float = position.m_dMarketValue
             ret: float = 100 * (price / cost - 1) if cost != 0 else 0.0
-            msg += f"- {codeOfPosition(position)} ({C.get_stock_name(codeOfPosition(position))}), 市值：{value:.2f}，盈亏: {ret:.2f}%\n"
-        print(msg)
+            msg += f"- {codeOfPosition(position)} ({C.get_stock_name(codeOfPosition(position))}), 市值：{value:.3f}，盈亏: {ret:.3f}%\n"
+        log.info(msg)
         messager.send_message(msg)
-        print("****************************************")
+        log.info("****************************************")
 
 # -------------------- 原有辅助函数 --------------------
 
@@ -543,9 +550,9 @@ def get_safe_price(C, code):
         subscribe = True
     )
     if code in ticksData and not ticksData[code].empty:
-        return round(ticksData[code]["close"].iloc[0], 2)
+        # 四舍五入到4位小数，确保etf价格精度
+        return round(ticksData[code]["close"].iloc[0], 4)
     return 9999
-
 
 def filter_etf(C):
     scores = []
@@ -561,7 +568,7 @@ def filter_etf(C):
     yesterday_str = yesterday_dt.strftime("%Y%m%d")
     today_str = current_dt.strftime("%Y%m%d")
 
-    print(f"【排查日志】当前计算时间: {current_dt}, 历史数据截止(实盘用): {today_str}")
+    log.info(f"【排查日志】当前计算时间: {current_dt}, 历史数据截止(实盘用): {today_str}")
 
     # 2. 批量获取数据（区分回测和实盘策略）
     # 聚宽逻辑核心：m_days 的历史 + 1 个当前最新价 = 总长度 m_days + 1
@@ -569,7 +576,7 @@ def filter_etf(C):
     history_data = C.get_market_data_ex(
         ['close'], C.etf_pool, period=Period, 
         start_time='', end_time=yesterday_str, count=g.m_days + 10, 
-        fill_data=False, subscribe=True
+        fill_data=False, subscribe=True, dividend_type="front"
     )
     # print(f"【排查日志-1】获取到的历史数据: {history_data}")
 
@@ -582,20 +589,20 @@ def filter_etf(C):
         
         # 实盘下，df 只包含截止到“昨天”的数据
         if len(df) < g.m_days:
-            print(f" > 忽略: {etf} 实盘历史数据不足")
+            log.info(f" > 忽略: {etf} 实盘历史数据不足")
             continue
         
         # 获取实时价格
         current_price = get_safe_price(C, etf)
         if current_price <= 0:
-            print(f" > 忽略: {etf} 实时价格无效")
+            log.info(f" > 忽略: {etf} 实时价格无效")
             continue
         
         # 拼接：历史最后 m_days + 当前价
         closes_history = df['close'].values[-g.m_days:]
         prices = np.append(closes_history, current_price)
 
-        # print(etf, "价格list", prices)
+        log.info(f"{etf} 价格list {prices}")
         # 再次校验长度
         if len(prices) < 2: continue
 
@@ -628,18 +635,17 @@ def filter_etf(C):
             drop_3 = prices[-3] / prices[-4]
             if min(drop_1, drop_2, drop_3) < 0.95:
                 score = 0
-                if not C.do_back_test: print(f" > 过滤: {etf} 触发暴跌保护")
+                if not C.do_back_test: log.info(f" > 过滤: {etf} 触发暴跌保护")
 
-            # 过滤近2日涨幅均超过8%的ETF（乖离太大，避免极端行情追高）
             if max(drop_1, drop_2) > 1.08:
                 score = 0
-                if not C.do_back_test: print(f" > 过滤: {etf} 触发涨幅过大保护")
+                if not C.do_back_test: log.info(f" > 过滤: {etf} 触发涨幅过大保护")
 
         # 6. 加入候选列表
         if 0 < score < 5:
-            scores.append({'code': etf, 'score': score})
+            scores.append({'code': etf, 'score': score, 'annualized_returns': annualized_returns, 'r2': r2})
         else:
-            print(f" > 过滤: {etf} 得分异常 ({score:.4f})")
+            log.info(f" > 过滤: {etf} 得分异常 ({score:.4f})")
 
     # 4. 排序与输出
     df_score = pd.DataFrame(scores)
@@ -658,7 +664,7 @@ def filter_etf(C):
             msg += f"{stock_name} - {row['score']:.3f}\n"
         messager.send_message(msg)
         
-    print(f"【排查日志-2】计算得到的得分: {df_score}")
+    log.info(f"【排查日志-2】计算得到的得分: {df_score}")
     # --- 防抖逻辑 ---
     # 获取当前持仓
     positions = get_trade_detail_data(C.account_id, 'stock', 'position')
@@ -686,8 +692,8 @@ def filter_etf(C):
                 # 如果第一名得分没有超过当前持仓得分的 (1 + threshold) 倍
                 if top_score < held_score * (1 + g.switch_threshold):
                     if not C.do_back_test:
-                        print(f"【防抖动】当前持仓 {held_etf} (分:{held_score:.4f}) vs 第一名 {top_etf} (分:{top_score:.4f})")
-                        print(f" > 优势不足 {g.switch_threshold*100}%，保持持仓")
+                        log.info(f"【防抖动】当前持仓 {held_etf} (分:{held_score:.4f}) vs 第一名 {top_etf} (分:{top_score:.4f})")
+                        log.info(f" > 优势不足 {g.switch_threshold*100}%，保持持仓")
                     return [held_etf]
 
     final_list = df_score['code'].head(g.stock_sum).tolist()
@@ -702,3 +708,78 @@ def orderError_callback(context, orderArgs, errMsg):
 # 前置增加开盘检测
 def is_trading(ContextInfo):
     return ContextInfo.get_instrumentdetail('600000.SH')['IsTrading'] or ContextInfo.get_instrumentdetail('600036.SH')['IsTrading'] or ContextInfo.get_instrumentdetail('600519.SH')['IsTrading']
+
+
+
+# ====================================================================
+# 【健壮性模块 0：日志模块 Logger】
+# 用于替代 print，支持同时输出到控制台和本地文件
+# ====================================================================
+
+class Logger:
+    def __init__(self, name="StrategyLogger"):
+        self.logger = logging.getLogger(name)
+        self.logger.setLevel(logging.INFO)
+        self.formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        
+        # 避免重复添加 Handler
+        if not self.logger.handlers:
+            # 1. 控制台 Handler
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(self.formatter)
+            self.logger.addHandler(console_handler)
+            
+            # 2. 文件 Handler (每天生成一个文件)
+            self._setup_file_handler()
+    
+    # TODO 写入文件 待测试
+    def _setup_file_handler(self):
+        try:
+            # 使用全局配置的日志路径
+            log_dir = LOG_DIR
+            
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+                
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            log_file = os.path.join(log_dir, f"TradeLog_{today_str}.log")
+            
+            file_handler = logging.FileHandler(log_file, encoding='utf-8')
+            file_handler.setFormatter(self.formatter)
+            self.logger.addHandler(file_handler)
+            
+            self.info(f"日志文件已创建: {log_file}")
+            
+        except Exception as e:
+            print(f"创建日志文件失败: {e}")
+
+    def info(self, msg):
+        if C.do_back_test:
+            print(msg)
+            return
+        try:
+            self.logger.info(msg)
+        except Exception:
+            # 即使日志写入失败，也要确保不阻塞主流程，并在控制台尝试输出
+            print(f"[LOG_FAIL] {msg}")
+        
+    def error(self, msg):
+        if C.do_back_test:
+            print(msg)
+            return
+        try:
+            self.logger.error(msg)
+        except Exception:
+            print(f"[LOG_FAIL][ERROR] {msg}")
+        
+    def warning(self, msg):
+        if C.do_back_test:
+            print(msg)
+            return
+        try:
+            self.logger.warning(msg)
+        except Exception:
+            print(f"[LOG_FAIL][WARN] {msg}")
+
+# 初始化全局日志对象
+log = Logger()

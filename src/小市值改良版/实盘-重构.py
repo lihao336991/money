@@ -86,6 +86,8 @@ def init(context: Any):
         context.run_time("trade_afternoon_func","1nDay","2025-03-01 14:30:00","SH")
         # 14:50 pm 检查当日是否到达空仓日，需要一键清仓
         context.run_time("close_account_func","1nDay","2025-03-01 14:50:00","SH")
+        # 14:55 pm 检查是否触发逃顶风控
+        context.run_time("check_escape_top_func","1nDay","2025-03-01 14:55:00","SH")
         # 15:05 pm 每日收盘后打印一次持仓
         context.run_time("print_position_info_func","1nDay","2025-03-01 15:05:00","SH")
         # 15:10 pm 每日收盘后打印一次候选股票池
@@ -127,6 +129,14 @@ class TradingStrategy:
         self.stoploss_limit: float = 0.88          # 个股止损阀值（成本价 × 0.88）
         self.stoploss_market: float = -0.94         # 大盘止损参数（若整体跌幅过大则触发卖出）
         
+        # 逃顶风控参数
+        self.basis_trigger = -2.0                  # 基差阈值
+        self.breadth_trigger = 0.3                 # 微盘广度阈值
+        self.basis_recovery = -1.2                 # 基差恢复阈值
+        self.breadth_recovery = 0.5                # 微盘广度恢复阈值
+        self.is_risk_warning = False               # 当前是否处于风险预警状态
+        self.warning_start_date = None             # 预警开始日期
+        
         self.pool = []
         self.pool_initialized = False
 
@@ -150,6 +160,18 @@ class TradingStrategy:
         # 兼容旧代码，同步时间变量
         context.currentTime = context.tm.timestamp
         context.today = context.tm.now
+
+        # 加载持久化状态
+        if not hasattr(context, 'storage'):
+            context.storage = Storage(context)
+        
+        self.is_risk_warning = context.storage.getStorage('is_risk_warning') or False
+        saved_date = context.storage.getStorage('warning_start_date')
+        if saved_date:
+            try:
+                self.warning_start_date = datetime.strptime(saved_date, '%Y-%m-%d').date()
+            except:
+                self.warning_start_date = None
 
     # 根据股票代码和收盘价，计算次日涨跌停价格
     def get_limit_of_stock(self, stock_code, last_close):
@@ -425,6 +447,8 @@ class TradingStrategy:
             initial_list = self.get_stock_pool(context)
         
         print(f"【选股】初始股票池: {len(initial_list)}只")
+
+        initial_list = self.filter_blacklist_stock(initial_list)        # 过滤黑名单股票
             
         initial_list = self.filter_kcbj_stock(initial_list)             # 过滤科创/北交股票
         # print(f"【选股】过滤科创/北交后: {len(initial_list)}只")
@@ -931,6 +955,122 @@ class TradingStrategy:
         else:
             return False        
     
+    def get_micro_breadth(self, context: Any):
+        """
+        计算微盘股广度
+        逻辑：
+        1. 选取中小综指成分股
+        2. 按市值排序取最小400只
+        3. 计算上涨家数占比
+        """
+        print('开始计算微盘股广度...')
+        try:
+            # 1. 获取股票池
+            initial_list = context.get_stock_list_in_sector('中小综指')
+            if not initial_list:
+                print("未获取到中小综指成分股")
+                return 0.5
+
+            # 2. 财务筛选
+            end_date = context.tm.date_str
+            start_date = context.tm.get_past_date(365) # 近一年
+            
+            # 批量获取财务数据
+            eps = context.get_raw_financial_data(
+                ['股本表.总股本'], 
+                initial_list, 
+                start_date, 
+                end_date
+            )
+            
+            if eps is None:
+                print("未获取到财务数据")
+                return 0.5
+
+            # 3. 获取今日价格计算市值
+            ticks = context.get_market_data_ex(
+                ['close'],                
+                initial_list,
+                period="1d",
+                start_time = context.tm.date_str,
+                end_time = context.tm.date_str,
+                count=1,
+                dividend_type = "follow",
+                fill_data = False,
+                subscribe = True
+            )
+
+            valid_stocks = []
+            for code in initial_list:
+                if code not in ticks or ticks[code].empty: continue
+                if code not in eps: continue
+                
+                try:
+                    # 获取最新一期财务数据
+                    shares_vals = list(eps[code]['股本表.总股本'].values())
+                    
+                    if not shares_vals:
+                        continue
+                        
+                    total_shares = shares_vals[-1]
+                    
+                    current_price = ticks[code].iloc[-1]['close']
+                    market_cap = current_price * total_shares
+                    valid_stocks.append({
+                        'code': code,
+                        'market_cap': market_cap
+                    })
+                except Exception:
+                    continue
+
+            if not valid_stocks:
+                print("筛选后无有效股票")
+                return 0.5
+
+            # 4. 排序取前400
+            df_result = pd.DataFrame(valid_stocks)
+            df_result = df_result.sort_values(by='market_cap', ascending=True)
+            micro_pool = df_result.head(400)['code'].tolist()
+            
+            if not micro_pool:
+                return 0.5
+
+            # 5. 计算广度 (对比昨日收盘)
+            # 获取最近2天数据
+            price_data = context.get_market_data_ex(
+                ['close'],
+                micro_pool,
+                period="1d",
+                start_time = context.tm.get_past_date(10), # 向前多取几天以防停牌或非交易日
+                end_time = context.tm.date_str,
+                count=2,
+                dividend_type = "follow",
+                fill_data = False,
+                subscribe = True
+            )
+            
+            rise_count = 0
+            total_count = 0
+            
+            for code in micro_pool:
+                if code in price_data and len(price_data[code]) >= 2:
+                    prev_close = price_data[code].iloc[-2]['close']
+                    curr_price = price_data[code].iloc[-1]['close']
+                    
+                    if curr_price > prev_close:
+                        rise_count += 1
+                    total_count += 1
+            
+            breadth = rise_count / total_count if total_count > 0 else 0.5
+            print(f"微盘广度计算完成: {breadth:.2%} (样本数: {total_count})")
+            return breadth
+
+        except Exception as e:
+            print(f"计算微盘广度出错: {e}")
+            # import traceback
+            # traceback.print_exc()
+            return 0.5
+
     def check_escape_top(self, context):
         # 1. 直接获取连续主力合约代码 (规避换月数据断层)
         # 备注：IML0 是中金所 IM 连续主力
@@ -974,29 +1114,56 @@ class TradingStrategy:
         weights = np.arange(1, g.window + 1)
         wma_basis = np.sum(df_merged['basis'].values * weights) / weights.sum()
         curr_basis = df_merged['basis'].iloc[-1]
-        print(f"主力连续: {main_continuous} | 实时基差: {curr_basis} | 7日加权: {wma_basis}")
-        # 如果wma_basis < -2，开始逃顶。当wma_basis > 2时，恢复交易
         
-        # 逃顶
-        if curr_basis < -2:
-            print(f"逃顶: {wma_basis}, {context.storage.getStorage('stop_trade')}")
-            if not context.storage.getStorage('stop_trade'):
-                context.storage.setStorage('stop_trade', True)
-                messager.sendLog(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}%")
-                messager.sendLog("📢📢📢📢📢 重大风险清仓 !!! 📢📢📢📢📢")
-                if self.hold_list:
-                    for stock in self.hold_list:
-                        self.close_position(context, stock)
-                        print(f"空仓日平仓，卖出股票 {stock}。")
+        # --- 计算微盘股广度 ---
+        breadth = self.get_micro_breadth(context)
+
+        messager.sendLog(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}% | 微盘广度: {breadth:.2%}")
+        
+        # 状态机切换逻辑
+        risk_trigger = (wma_basis < self.basis_trigger and breadth < self.breadth_trigger)
+        risk_recovery = (wma_basis > self.basis_recovery or breadth > self.breadth_recovery)
+
+        today = context.tm.now.date()
+
+        if not self.is_risk_warning and risk_trigger:
+            self.is_risk_warning = True
+            self.warning_start_date = today
             
-        # 恢复交易
-        else:
-            if context.storage.getStorage('stop_trade'):
-                context.storage.setStorage('stop_trade', False)
-                messager.sendLog(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}%")
-                messager.sendLog("✅️✅️✅️✅️ 恢复交易 !!!  ✅️✅️✅️✅️")
-                self.weekly_adjustment_select(context)
-                self.weekly_adjustment_buy(context)
+            # 写入缓存
+            context.storage.setStorage('is_risk_warning', True)
+            context.storage.setStorage('warning_start_date', str(today))
+            context.storage.setStorage('stop_trade', True) # 兼容旧逻辑
+            
+            msg = ">>> 🔴 [风险爆发] 实时信号 | WMA基差:%.2f | 微盘广度:%.1f%%" % (wma_basis, breadth * 100)
+            print(msg)
+            messager.sendLog(msg)
+            messager.sendLog("📢📢📢📢📢 重大风险清仓 !!! 📢📢📢📢📢")
+            
+            # 执行清仓
+            if self.hold_list:
+                for stock in self.hold_list:
+                    self.close_position(context, stock)
+                    print(f"逃顶平仓，卖出股票 {stock}。")
+
+        elif self.is_risk_warning and risk_recovery:
+            duration = (today - self.warning_start_date).days if self.warning_start_date else 0
+            self.is_risk_warning = False
+            
+            # 写入缓存
+            context.storage.setStorage('is_risk_warning', False)
+            context.storage.setStorage('warning_start_date', None)
+            context.storage.setStorage('stop_trade', False) # 兼容旧逻辑
+            
+            msg = ">>> 🟢 [风险解除] 持续:%d天" % duration
+            print(msg)
+            messager.sendLog(msg)
+            messager.sendLog("✅️✅️✅️✅️ 恢复交易 !!!  ✅️✅️✅️✅️")
+            self.warning_start_date = None
+            
+            # 恢复交易：重新选股买入
+            self.weekly_adjustment_select(context)
+            self.weekly_adjustment_buy(context)
 
     # 早盘检查是否处于逃顶状态，是否有遗留仓位待清空
     def check_escape_top_position(self, context):
@@ -1020,7 +1187,6 @@ class TradingStrategy:
             context: 聚宽平台传入的交易上下文对象
         """
         # 检查是否需要逃顶
-        self.check_escape_top(context)
         if self.no_trading_today_signal:
             if self.hold_list:
                 for stock in self.hold_list:
@@ -1126,6 +1292,15 @@ def check_escape_top_position_func(context: Any):
         context: 聚宽平台传入的交易上下文对象
     """
     strategy.check_escape_top_position(context)
+
+def check_escape_top_func(context: Any):
+    """
+    包装调用策略实例的 check_escape_top 方法
+
+    参数:
+        context: 聚宽平台传入的交易上下文对象
+    """
+    strategy.check_escape_top(context)
 
 def sell_stocks_func(context: Any):
     """

@@ -1,13 +1,14 @@
 #encoding:gbk
 import datetime
+import json
+import time as nativeTime
 from datetime import datetime, time, timedelta
 
 import numpy as np
-import requests
 import pandas as pd
+import requests
 
-import time as nativeTime
-import json
+
 # ====================================================================
 # 【全局配置】
 # ====================================================================
@@ -29,6 +30,27 @@ def init(context):
     context.tm = TimeManager(context)
     context.runner = TaskRunner(context)
     context.run_time("record_smoothed_basis","1nDay","2025-03-01 14:55:00","SH")
+
+    g.cache_file = 'basis_monitor_status.json'
+    context.storage = Storage(context)
+
+    # 风控参数初始化
+    g.is_risk_warning = context.storage.getStorage('is_risk_warning') or False
+    
+    saved_date = context.storage.getStorage('warning_start_date')
+    if saved_date:
+        # 恢复日期对象 (假设存储的是字符串 YYYY-MM-DD)
+        try:
+            g.warning_start_date = datetime.strptime(saved_date, '%Y-%m-%d').date()
+        except:
+            g.warning_start_date = None
+    else:
+        g.warning_start_date = None
+    
+    g.basis_trigger = -2.0         
+    g.breadth_trigger = 0.3
+    g.basis_recovery = -1.2        
+    g.breadth_recovery = 0.5
 
 g.window = 7                # 监控基差 7日窗口
 
@@ -80,17 +102,165 @@ def record_smoothed_basis(context):
     wma_basis = np.sum(df_merged['basis'].values * weights) / weights.sum()
     curr_basis = df_merged['basis'].iloc[-1]
 
-    print(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}%")
+    # --- 计算微盘股广度 ---
+    breadth = get_micro_breadth(context)
     
-    # 逃顶
-    if curr_basis < -2:
-        print(f"逃顶: {wma_basis}")
-        messager.sendLog(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 期货价格：{df_fut.iloc[-1]['fut_close']:.2f}， 现货价格：{df_idx.iloc[-1]['idx_close']:.2f}")
-        messager.sendLog("📢📢📢📢📢 重大风险清仓 !!! 📢📢📢📢📢")
-        messager.sendLog("📢📢📢📢📢 重大风险清仓 !!! 📢📢📢📢📢")
-        messager.sendLog("📢📢📢📢📢 重大风险清仓 !!! 📢📢📢📢📢")
-    else:
-        messager.sendLog(f"基差：{curr_basis:.2f}%，没有风险")
+    print(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}% | 微盘广度: {breadth:.2%}")
+
+    # 状态机切换逻辑
+    risk_trigger = (wma_basis < g.basis_trigger and breadth < g.breadth_trigger)
+    risk_recovery = (wma_basis > g.basis_recovery or breadth > g.breadth_recovery)
+
+    today = context.tm.now.date()
+
+    if not g.is_risk_warning and risk_trigger:
+        g.is_risk_warning = True
+        g.warning_start_date = today
+        
+        # 写入缓存
+        context.storage.setStorage('is_risk_warning', True)
+        context.storage.setStorage('warning_start_date', str(today)) # 保存为字符串
+        
+        msg = ">>> 🔴 [风险爆发] 14:50实时信号 | WMA基差:%.2f | 微盘广度:%.1f%%" % (wma_basis, breadth * 100)
+        print(msg)
+        messager.sendLog(msg)
+        # 执行清仓
+        sell_all_stocks(context)
+
+    elif g.is_risk_warning and risk_recovery:
+        duration = (today - g.warning_start_date).days if g.warning_start_date else 0
+        g.is_risk_warning = False
+        
+        # 写入缓存
+        context.storage.setStorage('is_risk_warning', False)
+        context.storage.setStorage('warning_start_date', None)
+        
+        msg = ">>> 🟢 [风险解除] 持续:%d天" % duration
+        print(msg)
+        messager.sendLog(msg)
+        g.warning_start_date = None
+
+def sell_all_stocks(context):
+    msg = "【操作】检测到风控信号，建议执行全仓平仓。"
+    print(msg)
+    messager.sendLog(msg)
+    # TODO: Implement QMT sell logic
+
+def get_micro_breadth(context):
+    """
+    计算微盘股广度
+    逻辑：
+    1. 选取中小综指成分股
+    2. 按市值排序取最小400只
+    3. 计算上涨家数占比
+    """
+    print('开始计算微盘股广度...')
+    try:
+        # 1. 获取股票池
+        initial_list = context.get_stock_list_in_sector('中小综指')
+        if not initial_list:
+            print("未获取到中小综指成分股")
+            return 0.5
+
+        # 2. 财务筛选
+        end_date = context.tm.date_str
+        start_date = context.tm.get_past_date(365) # 近一年
+        
+        # 批量获取财务数据
+        eps = context.get_raw_financial_data(
+            ['股本表.总股本'], 
+            initial_list, 
+            start_date, 
+            end_date
+        )
+        
+        if eps is None:
+            print("未获取到财务数据")
+            return 0.5
+
+        # 3. 获取今日价格计算市值
+        ticks = context.get_market_data_ex(
+            ['close'],                
+            initial_list,
+            period="1d",
+            start_time = context.tm.date_str,
+            end_time = context.tm.date_str,
+            count=1,
+            dividend_type = "follow",
+            fill_data = False,
+            subscribe = True
+        )
+
+        valid_stocks = []
+        for code in initial_list:
+            if code not in ticks or ticks[code].empty: continue
+            if code not in eps: continue
+            
+            try:
+                # 获取最新一期财务数据
+                shares_vals = list(eps[code]['股本表.总股本'].values())
+                
+                if not shares_vals:
+                    continue
+                    
+                total_shares = shares_vals[-1]
+                
+                current_price = ticks[code].iloc[-1]['close']
+                market_cap = current_price * total_shares
+                valid_stocks.append({
+                    'code': code,
+                    'market_cap': market_cap
+                })
+            except Exception:
+                continue
+
+        if not valid_stocks:
+            print("筛选后无有效股票")
+            return 0.5
+
+        # 4. 排序取前400
+        df_result = pd.DataFrame(valid_stocks)
+        df_result = df_result.sort_values(by='market_cap', ascending=True)
+        micro_pool = df_result.head(400)['code'].tolist()
+        
+        if not micro_pool:
+            return 0.5
+
+        # 5. 计算广度 (对比昨日收盘)
+        # 获取最近2天数据
+        price_data = context.get_market_data_ex(
+            ['close'],
+            micro_pool,
+            period="1d",
+            start_time = context.tm.get_past_date(10), # 向前多取几天以防停牌或非交易日
+            end_time = context.tm.date_str,
+            count=2,
+            dividend_type = "follow",
+            fill_data = False,
+            subscribe = True
+        )
+        
+        rise_count = 0
+        total_count = 0
+        
+        for code in micro_pool:
+            if code in price_data and len(price_data[code]) >= 2:
+                prev_close = price_data[code].iloc[-2]['close']
+                curr_price = price_data[code].iloc[-1]['close']
+                
+                if curr_price > prev_close:
+                    rise_count += 1
+                total_count += 1
+        
+        breadth = rise_count / total_count if total_count > 0 else 0.5
+        print(f"微盘广度计算完成: {breadth:.2%} (样本数: {total_count})")
+        return breadth
+
+    except Exception as e:
+        print(f"计算微盘广度出错: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0.5
 
 def checkTask(context):
     context.runner.check_tasks(context.tm.now)
@@ -320,7 +490,39 @@ class Messager:
 messager = Messager()
 
 
-
 def is_trading(ContextInfo):
     current_time = datetime.now().time()
     return time(9,0) <= current_time <= time(16,0)
+
+
+class Storage:
+    def __init__(self, context):
+        self.context = context
+        self.cache_file = g.cache_file
+        if self.context.do_back_test:
+            self._data = {}
+        else:
+            self._data = self._load_from_file()
+
+    def _load_from_file(self):
+        try:
+            with open(self.cache_file, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def _save_to_file(self):
+        if self.context.do_back_test:
+            return
+        try:
+            with open(self.cache_file, 'w') as f:
+                json.dump(self._data, f)
+        except Exception as e:
+            print(f"写入缓存文件 {self.cache_file} 失败: {e}")
+
+    def getStorage(self, key):
+        return self._data.get(key)
+
+    def setStorage(self, key, value):
+        self._data[key] = value
+        self._save_to_file()
