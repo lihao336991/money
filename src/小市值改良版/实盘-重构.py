@@ -25,6 +25,8 @@ g = G()
 # ================ 全局状态存储器 ================
 g.cache_file = 'stock_list_cache.txt'   # 缓存的文件地址，桌面上的cache_list.txt
 g.window = 7                # 监控基差 7日窗口
+# 黑名单列表 (支持部分匹配，如 '688' 会过滤所有688开头的股票)
+g.blacklist = ['002694']
 
 
 def init(context: Any):
@@ -483,6 +485,20 @@ class TradingStrategy:
         context.storage.setStorage('target_list', final_list)
 
         return final_list
+
+    def filter_blacklist_stock(self, stock_list: List[str]):
+        """
+        过滤黑名单股票：如果股票代码包含黑名单中的任意字符串，则过滤
+        """
+        if not hasattr(g, 'blacklist') or not g.blacklist:
+            return stock_list
+            
+        print(f"应用黑名单过滤: {g.blacklist}")
+        # 使用列表推导式过滤，如果 stock 包含任何黑名单里的 code 片段，则排除
+        # 例如黑名单有 '688'，则所有 '688xxx.SH' 都会被过滤
+        filtered_list = [stock for stock in stock_list if not any(black_code in stock for black_code in g.blacklist)]
+        print(f"黑名单过滤掉 {len(stock_list) - len(filtered_list)} 只股票")
+        return filtered_list
 
     def find_target_stock_list(self, context):
         self.target_list = self.get_stock_list(context)        

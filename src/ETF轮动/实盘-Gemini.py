@@ -263,6 +263,7 @@ def init(C):
     # 注册任务调度器和消息推送
     C.runner = TaskRunner(C)
     messager.set_is_test(C.do_back_test)
+    log.set_do_back_test(C.do_back_test)
     log.info(f"当前运行模式: {'回测' if C.do_back_test else '实盘'}")
     
     # 初始化时间戳
@@ -293,7 +294,7 @@ def init(C):
         "159550.SZ", # 互联网
         "512710.SH", # 军工
         "159692.SZ", # 证券
-        "562500.SH", # 机器人
+        # "562500.SH", # 机器人
     ]
 
     # 判断当前日期是否为非交易日 (仅实盘需要主动过滤)
@@ -574,9 +575,13 @@ def filter_etf(C):
     # 聚宽逻辑核心：m_days 的历史 + 1 个当前最新价 = 总长度 m_days + 1
 
     history_data = C.get_market_data_ex(
-        ['close'], C.etf_pool, period=Period, 
-        start_time='', end_time=yesterday_str, count=g.m_days + 10, 
-        fill_data=False, subscribe=True, dividend_type="front"
+        ['close', 'volume'], C.etf_pool, period=Period, 
+        start_time='', 
+        end_time=yesterday_str, 
+        count=g.m_days + 10, 
+        fill_data=False, 
+        subscribe=True, 
+        dividend_type="follow"
     )
     # print(f"【排查日志-1】获取到的历史数据: {history_data}")
 
@@ -587,20 +592,27 @@ def filter_etf(C):
             
         df = history_data[etf]
         
-        # 实盘下，df 只包含截止到“昨天”的数据
+        # 过滤停牌日期（volume=0）
+        df = df[df['volume'] > 0]
+        
+        log.info(f"【排查】{etf} 原始历史数据长度: {len(df)}")
+        
+        # 实盘下，df 只包含截止到"昨天"的数据
         if len(df) < g.m_days:
-            log.info(f" > 忽略: {etf} 实盘历史数据不足")
+            log.info(f" &gt; 忽略: {etf} 实盘历史数据不足")
             continue
         
         # 获取实时价格
         current_price = get_safe_price(C, etf)
         if current_price <= 0:
-            log.info(f" > 忽略: {etf} 实时价格无效")
+            log.info(f" 忽略: {etf} 实时价格无效")
             continue
         
         # 拼接：历史最后 m_days + 当前价
         closes_history = df['close'].values[-g.m_days:]
         prices = np.append(closes_history, current_price)
+        
+        log.info(f"【排查】{etf} closes_history长度: {len(closes_history)}, prices总长度: {len(prices)}")
 
         log.info(f"{etf} 价格list {prices}")
         # 再次校验长度
@@ -721,7 +733,7 @@ class Logger:
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.INFO)
         self.formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-        
+        self.do_back_test = False
         # 避免重复添加 Handler
         if not self.logger.handlers:
             # 1. 控制台 Handler
@@ -731,7 +743,8 @@ class Logger:
             
             # 2. 文件 Handler (每天生成一个文件)
             self._setup_file_handler()
-    
+    def set_do_back_test(self, do_back_test):
+        self.do_back_test = do_back_test
     # TODO 写入文件 待测试
     def _setup_file_handler(self):
         try:
@@ -754,7 +767,7 @@ class Logger:
             print(f"创建日志文件失败: {e}")
 
     def info(self, msg):
-        if C.do_back_test:
+        if self.do_back_test:
             print(msg)
             return
         try:
@@ -764,7 +777,7 @@ class Logger:
             print(f"[LOG_FAIL] {msg}")
         
     def error(self, msg):
-        if C.do_back_test:
+        if self.do_back_test:
             print(msg)
             return
         try:
@@ -773,7 +786,7 @@ class Logger:
             print(f"[LOG_FAIL][ERROR] {msg}")
         
     def warning(self, msg):
-        if C.do_back_test:
+        if self.do_back_test:
             print(msg)
             return
         try:

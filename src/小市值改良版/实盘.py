@@ -33,9 +33,6 @@ g.cache_file = 'stock_list_cache.txt'
 # 黑名单列表 (支持部分匹配，如 '688' 会过滤所有688开头的股票)
 g.blacklist = ['002694']
 
-def is_trading():
-    current_time = datetime.now().time()
-    return time(9,0) <= current_time <= time(16,0)
 
 class Messager:
     def __init__(self):
@@ -43,6 +40,11 @@ class Messager:
         self.webhook1 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618'
         # 日志记录
         self.webhook2 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618'
+    
+    def is_trading(self):
+        current_time = datetime.now().time()
+        return time(9,0) <= current_time <= time(16,0)
+
     def set_is_test(self, is_test):
         self.is_test = is_test
     def send_message(self, webhook, message):
@@ -63,7 +65,7 @@ class Messager:
             print('消息发送失败')
     # 发送消息（支持控制只在开盘期间推送）
     def sendLog(self, message):
-        if is_trading():
+        if self.is_trading():
             self.send_message(self.webhook2, message)
         print(message)
 
@@ -165,7 +167,7 @@ class TradingStrategy:
     def __init__(self):
         # 策略基础配置和状态变量
         self.no_trading_today_signal: bool = False  # 【慎用！！！快捷平仓选项】当天是否执行空仓（资金再平衡）操作
-        self.pass_april: bool = True                # 是否在04月或01月期间执行空仓策略
+        self.pass_april: bool = False                # 是否在04月或01月期间执行空仓策略
         self.run_stoploss: bool = False              # 是否启用止损策略
 
         # 持仓和调仓记录
@@ -601,8 +603,10 @@ class TradingStrategy:
             target_list: List[str] = self.target_list[:self.stock_num]
 
             # 对目标股票执行买入操作
-            # self.buy_security(context, target_list)
-            self.new_buy_target(context)
+            if context.do_back_test:
+                self.buy_security(context, target_list)
+            else:
+                self.new_buy_target(context)
 
     def check_limit_up(self, context: Any):
         """
@@ -1335,7 +1339,7 @@ def init(context: Any):
     # 注册调度任务，所有任务均使用顶层包装函数（不使用 lambda 以确保可序列化）
     
     # 判断当前日期是否为周末，如果是则直接返回
-    if not context.do_back_test and not is_trading(context):
+    if not context.do_back_test and not messager.is_trading():
         print('当前日期为非交易日，不执行任务')
         return
 
@@ -1431,5 +1435,5 @@ def order_callback(context, orderInfo):
     messager.sendLog("已委托： " + context.get_stock_name(strategy.codeOfPosition(orderInfo)))
     
 # 前置增加开盘检测
-def is_trading(ContextInfo):
-    return ContextInfo.get_instrumentdetail('600000.SH')['IsTrading'] or ContextInfo.get_instrumentdetail('600036.SH')['IsTrading'] or ContextInfo.get_instrumentdetail('600519.SH')['IsTrading']
+# def is_trading(context):
+#     return context.get_instrumentdetail('600000.SH')['IsTrading'] or context.get_instrumentdetail('600036.SH')['IsTrading'] or context.get_instrumentdetail('600519.SH')['IsTrading']

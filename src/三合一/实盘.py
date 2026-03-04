@@ -475,7 +475,8 @@ def get_priority_list(C, hl_list, date):
                 pass
         
         if stock_num == 0:
-            print(f"【对比日志】过滤 {s}: 总股本为0")
+            print(f"【对比日志】过滤 {s}: 总股本为0")            
+            
             continue
             
         market_cap_val = close * stock_num / 1e8 # 亿
@@ -526,27 +527,27 @@ def get_stock_list_func(C):
     # 批量获取最近3天数据 (T, T-1, T-2) + T-3 (for Limit calculation of T-2)
     # count=4: T, T-1, T-2, T-3
     data = C.get_market_data_ex(
-        ['close'], initial_list, period="1d", start_time='', end_time=date,
+        ['close', 'high'], initial_list, period="1d", start_time='', end_time=date,
         count=4, dividend_type="follow", fill_data=False, subscribe=False
     )
+
+    # 打印前10个数据
+    for s in initial_list[:10]:
+        if s in data and not data[s].empty:
+            print(f"{s} 数据: {data[s].tail()}")
+        else:
+            print(f"{s} 无数据")
     
     hl0_list = [] # T日涨停
     hl1_list = [] # T-1曾涨停 (聚宽原代码 get_ever_hl_stock 是 "曾" 触及涨停)
     hl2_list = [] # T-2曾涨停
-    
-    # 聚宽 get_ever_hl_stock 用的是 high == high_limit
-    # 所以我们需要 high 数据
-    data_high = C.get_market_data_ex(
-        ['high'], initial_list, period="1d", start_time='', end_time=date,
-        count=4, dividend_type="follow", fill_data=False, subscribe=False
-    )
     
     for s in initial_list:
         if s not in data or len(data[s]) < 4:
             continue
         
         closes = data[s]['close'].values
-        highs = data_high[s]['high'].values
+        highs = data[s]['high'].values
         
         # Data structure: [T-3, T-2, T-1, T]
         # Limit(T) needs Close(T-1)
@@ -829,7 +830,7 @@ def init(C):
     print("【初始化】策略初始化完成")
 
     # debug 实盘直接运行
-    # get_stock_list_func(C)
+    get_stock_list_func(C)
     # buy_func(C)
 
 def handlebar(C):
