@@ -64,7 +64,7 @@ g.etf_pool = [
     "159692.SZ", # 港股通医药
 ]
 
-HOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=2a336b4c-c38e-4ae3-9ff6-f14f175b4f73"
+HOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=76383113-1a5b-4932-9f19-3f990405ec96"
 
 
 class Messager:
@@ -598,7 +598,10 @@ def precheck_and_fix(C):
         _notify("【前置检查】警告", f"股本数据抽检偏少: stat={cap_stat}（需要在客户端界面下载财务数据或提供下载函数）")
 
     elapsed = time.time() - t0
-    _notify("【前置检查】完成", f"耗时={elapsed:.2f}s, results={precheck_results}")
+    results_lines = []
+    for item in precheck_results:
+        results_lines.append(f"\n{item}")
+    _notify("【前置检查】完成", f"耗时={elapsed:.2f}s\n" + "\n".join(results_lines))
 
 
 def post_market_download(C):
@@ -644,7 +647,10 @@ def post_market_download(C):
         _notify("【盘后补全】日线下载触发", f"{name} start={start_time}, end={today_str}, result={ret}")
 
     elapsed = time.time() - t0
-    _notify("【盘后补全】完成", f"耗时={elapsed:.2f}s, results={results}")
+    results_lines = []
+    for item in results:
+        results_lines.append(f"\n{item}")
+    _notify("【盘后补全】完成", f"耗时={elapsed:.2f}s\n" + "\n".join(results_lines))
 
 
 def init(C):
