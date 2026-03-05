@@ -41,10 +41,6 @@ class Messager:
         # 日志记录
         self.webhook2 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618'
     
-    def is_trading(self):
-        current_time = datetime.now().time()
-        return time(9,0) <= current_time <= time(16,0)
-
     def set_is_test(self, is_test):
         self.is_test = is_test
     def send_message(self, webhook, message):
@@ -65,89 +61,17 @@ class Messager:
             print('消息发送失败')
     # 发送消息（支持控制只在开盘期间推送）
     def sendLog(self, message):
-        if self.is_trading():
-            self.send_message(self.webhook2, message)
         print(message)
 
     def sendMsg(self, message):
         self.send_message(self.webhook1, message)
   
-    def send_deal(self, dealInfo):
-        stock = dealInfo.m_strProductName
-        price = dealInfo.m_dPrice
-        amount = dealInfo.m_dTradeAmount
-        markdown = f"""
-        新增买入股票: <font color='warning'>{stock}</font>
-        > 成交价: <font color='warning'>{price}/font>
-        > 成交额: <font color='warning'>{amount}</font>
-        """
-        self.send_message(self.webhook1, markdown)
-    
     def send_account_info(self, context):
         accounts = get_trade_detail_data(context.account, 'stock', 'account')
         for dt in accounts:
             self.sendMsg(f'总资产: {dt.m_dBalance:.2f},\n总市值: {dt.m_dInstrumentValue:.2f},\n' + f'可用金额: {dt.m_dAvailable:.2f},\n持仓总盈亏: {dt.m_dPositionProfit:.2f}')
         
-    def send_positions(self, context):
-        if context.do_back_test:
-            return
-        positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
-        df_result = pd.DataFrame(columns=['stock', 'price', 'open_price', 'amount', 'ratio', 'profit'])
-        for position in positions:
-            df_result = df_result.append({
-            'stock': position.m_strInstrumentName,
-            'price': position.m_dLastPrice,
-            'open_price': position.m_dOpenPrice,
-            'amount': position.m_dMarketValue,
-            'ratio': position.m_dProfitRate,
-            'profit': position.m_dFloatProfit,
-            }, ignore_index=True)
 
-        markdown = """
-        ## 股票持仓报告
-        """
-        num = len(df_result)
-        total_profit = df_result['profit'].sum()
-        if total_profit > 0:
-            total_profit = f"<font color='info'>{total_profit:.2f}</font>"
-        else:
-            total_profit = f"<font color='warning'>{total_profit:.2f}</font>"
-
-        for index, row in df_result.iterrows():
-            row_str = self.get_position_markdown(row)
-            markdown += row_str
-        markdown += f"""
-        ---
-        **持仓统计**
-        总持仓数：{num} 只
-        总盈亏额：{total_profit}
-        """
-        self.send_message(self.webhook1, markdown)
-
-    def get_position_markdown(self, position):
-        stock = position['stock']
-        price = position['price']
-        open_price = position['open_price']
-        amount = position['amount']
-        ratio = position['ratio']
-        ratio_str = ratio * 100
-        if ratio_str > 0:
-            ratio_str = f"<font color='info'>{ratio_str:.2f}%</font>"
-        else:
-            ratio_str = f"<font color='warning'>{ratio_str:.2f}%</font>"
-        profit = position['profit']
-        if profit > 0:
-            profit = f"<font color='info'>{profit:.2f}</font>"
-        else:
-            profit = f"<font color='warning'>{profit:.2f}</font>"
-        return f"""
-    **{stock}**
-    ├─ 当前价：{price:.2f}
-    ├─ 成本价：{open_price:.2f}
-    ├─ 持仓额：{amount:.2f}
-    ├─ 盈亏率：{ratio_str}
-    └─ 当日盈亏：{profit}
-        """
 messager = Messager()
 class Log:
     def debug(*args):
@@ -261,16 +185,10 @@ class TradingStrategy:
         # 这里给context挂一个positions持仓对象，仅盘前可以复用，盘中要实时取数据不能使用这个
         self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
 
-        if not self.positions:
-            print("昨日没有持仓数据。")
-            if not context.do_back_test:
-                messager.sendMsg("今日交易已开始。昨日没有持仓数据。")
-                messager.send_account_info(context)
-            return
-
         if not context.do_back_test:
-            messager.send_positions(context)
             messager.send_account_info(context)
+
+
 
 
     # 通用方法，返回给定list里昨日涨跌停的股票
@@ -1088,44 +1006,7 @@ class TradingStrategy:
                     self.close_position(context, stock)
                     print(f"空仓日平仓，卖出股票 {stock}。")
 
-    def print_position_info(self, context: Any):
-        """
-        打印当前持仓详细信息，包括股票代码、成本价、现价、涨跌幅、持仓股数和市值
 
-        参数:
-            context: 聚宽平台传入的交易上下文对象
-        """
-        # TODO 这里其实可以使用持仓统计对象，有更多统计相关数据
-        self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
-        self.hold_list = [self.codeOfPosition(position) for position in self.positions]
-
-        if self.positions:
-            print(f"********** 持仓信息打印开始 {context.account}**********")
-            messager.send_positions(context)
-            messager.send_account_info(context)
-            total = 0
-            for position in self.positions:
-                cost: float = position.m_dOpenPrice
-                price: float = position.m_dLastPrice
-                ret: float = 100 * (price / cost - 1) if cost != 0 else 0.0  # 避免除以零错误
-                value: float = position.m_dMarketValue
-                amount: int = position.m_nVolume
-                code = self.codeOfPosition(position)
-                print(f"股票: {self.codeOfPosition(position)}")
-                print(f"股票名: {context.get_stock_name(code)}")
-                print(f"成本价: {cost:.2f}")
-                print(f"现价: {price:.2f}")
-                print(f"涨跌幅: {ret:.2f}%")
-                print(f"持仓: {amount}")
-                print(f"市值: {value:.2f}")
-                print("--------------------------------------")
-                total += value
-            print(f"总市值：{total:.2f}")
-            print("********** 持仓信息打印结束 **********")
-        else:
-            print("**********没有持仓信息**********")
-            messager.sendMsg("持仓状态：空仓")
-            messager.send_account_info(context)
 
 # 创建全局策略实例，策略入口处使用该实例
 strategy = TradingStrategy()
@@ -1208,15 +1089,16 @@ def close_account_func(context: Any):
     print('收盘前检查是否需要清仓...')
     strategy.close_account(context)
 
+def send_account_info_close_func(context: Any):
+    accounts = get_trade_detail_data(context.account, 'stock', 'account')
+    for dt in accounts:
+        msg = f'总资产: {dt.m_dBalance:.2f},\n总市值: {dt.m_dInstrumentValue:.2f},\n' + f'可用金额: {dt.m_dAvailable:.2f},\n持仓总盈亏: {dt.m_dPositionProfit:.2f}'
+        print(msg)
+        messager.sendMsg(msg)
+        break
 
-def print_position_info_func(context: Any):
-    """
-    包装调用策略实例的 print_position_info 方法
 
-    参数:
-        context: 聚宽平台传入的交易上下文对象
-    """
-    strategy.print_position_info(context)
+
     
 def log_target_list_info(context: Any):
     """
@@ -1339,7 +1221,7 @@ def init(context: Any):
     # 注册调度任务，所有任务均使用顶层包装函数（不使用 lambda 以确保可序列化）
     
     # 判断当前日期是否为周末，如果是则直接返回
-    if not context.do_back_test and not messager.is_trading():
+    if not context.do_back_test and not is_trading(context):
         print('当前日期为非交易日，不执行任务')
         return
 
@@ -1356,9 +1238,9 @@ def init(context: Any):
         # 14:30 pm 检查需要卖出的持仓
         context.runner.run_daily("14:30", trade_afternoon_func)
         # 14:50 pm 检查当日是否需要一键清仓
-        context.runner.run_daily("14:50", close_account_func)    
-        # 15:05 pm 每日收盘后打印一次持仓
-        context.runner.run_daily("14:59", print_position_info_func)
+        context.runner.run_daily("14:50", close_account_func)
+        context.runner.run_daily("15:00", send_account_info_close_func)
+
         # -------------------每周执行任务 --------------------------------
         # 每周做一次调仓动作
         context.runner.run_weekly(1, "10:30", weekly_adjustment_func)
@@ -1376,8 +1258,8 @@ def init(context: Any):
         context.run_time("trade_afternoon_func","1nDay","2025-03-01 14:30:00","SH")
         # 14:50 pm 检查当日是否到达空仓日，需要一键清仓
         context.run_time("close_account_func","1nDay","2025-03-01 14:50:00","SH")
-        # 15:05 pm 每日收盘后打印一次持仓
-        context.run_time("print_position_info_func","1nDay","2025-03-01 15:05:00","SH")
+        context.run_time("send_account_info_close_func","1nDay","2025-03-01 15:00:00","SH")
+
         # 15:10 pm 每日收盘后打印一次候选股票池
         context.run_time("log_target_list_info","1nDay","2025-03-01 15:10:00","SH")
         
@@ -1435,5 +1317,5 @@ def order_callback(context, orderInfo):
     messager.sendLog("已委托： " + context.get_stock_name(strategy.codeOfPosition(orderInfo)))
     
 # 前置增加开盘检测
-# def is_trading(context):
-#     return context.get_instrumentdetail('600000.SH')['IsTrading'] or context.get_instrumentdetail('600036.SH')['IsTrading'] or context.get_instrumentdetail('600519.SH')['IsTrading']
+def is_trading(context):
+    return context.get_instrumentdetail('600000.SH')['IsTrading'] or context.get_instrumentdetail('600036.SH')['IsTrading'] or context.get_instrumentdetail('600519.SH')['IsTrading']

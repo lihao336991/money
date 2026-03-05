@@ -249,6 +249,14 @@ def get_strategy_asset(C):
     strategy_asset = total_asset - manual_holdings_value
     return strategy_asset
 
+def send_account_info_close_func(C):
+    accounts = get_trade_detail_data(C.account_id, 'stock', 'account')
+    for dt in accounts:
+        msg = f"总资产: {dt.m_dBalance:.2f},\n总市值: {dt.m_dInstrumentValue:.2f},\n可用金额: {dt.m_dAvailable:.2f},\n持仓总盈亏: {dt.m_dPositionProfit:.2f}"
+        log.info(msg)
+        messager.send_message(msg)
+        break
+
 # ====================================================================
 # 【核心策略逻辑】
 # ====================================================================
@@ -308,7 +316,7 @@ def init(C):
         # 回测中使用 TaskRunner 的精确时间模拟
         C.runner.run_daily("11:00", execute_sell_logic)
         C.runner.run_daily("11:05", execute_buy_logic)
-        C.runner.run_daily("14:59", log_position)
+        C.runner.run_daily("15:00", send_account_info_close_func)
         
     else:
         log.info('doing live - 注册实盘任务')
@@ -316,7 +324,8 @@ def init(C):
         C.run_time("execute_sell_logic","1nDay","2025-12-01 11:00:00","SH")
         C.run_time("execute_buy_logic","1nDay","2025-12-01 11:03:00","SH")
         C.run_time("filter_etf","1nDay","2025-12-01 14:57:00","SH")
-        C.run_time("log_position","1nDay","2025-12-01 15:00:00","SH")
+        C.run_time("send_account_info_close_func","1nDay","2025-12-01 15:00:00","SH")
+
 
     log.info("策略初始化完成，已设置为分步调仓模式")
     
@@ -520,21 +529,7 @@ def cancel_unfilled_orders(C):
              cancel(order.m_strOrderID, C.account_id, 'stock')
              log.info(f"撤销未成交订单: {order.m_strInstrumentID}")
 
-def log_position(C):
-    """【健壮性模块 1 延伸：收盘持仓日志】(移植自您的 ST 策略)"""
-    positions = get_trade_detail_data(C.account_id, 'STOCK', 'POSITION')
-    if positions:
-        log.info("********** 收盘持仓信息打印开始 **********")
-        msg = f"【收盘持仓】日期: {C.today.strftime('%Y-%m-%d')}\n"
-        for position in positions:
-            cost: float = position.m_dOpenPrice
-            price: float = position.m_dLastPrice
-            value: float = position.m_dMarketValue
-            ret: float = 100 * (price / cost - 1) if cost != 0 else 0.0
-            msg += f"- {codeOfPosition(position)} ({C.get_stock_name(codeOfPosition(position))}), 市值：{value:.3f}，盈亏: {ret:.3f}%\n"
-        log.info(msg)
-        messager.send_message(msg)
-        log.info("****************************************")
+
 
 # -------------------- 原有辅助函数 --------------------
 

@@ -117,6 +117,132 @@ def _to_yyyymmdd(value):
         return ""
 
 
+def print_daily_profit(C):
+    """
+    打印账户持仓及当日收益报告
+    逻辑迁移自：小市值改良版/实盘.py
+    """
+    if not hasattr(C, "get_trade_detail_data"):
+        print("非QMT交易环境，跳过收益播报")
+        return
+
+    # 1. 获取账号 (兼容多策略)
+    # QMT中 C.get_trade_detail_data 需要 account_id
+    # 这里尝试从 C 中获取，或遍历所有账号
+    account_id = getattr(C, "account", "")
+    if not account_id:
+        # 尝试获取第一个可用账号
+        acct_list = C.get_trade_detail_data("", "stock", "account")
+        if acct_list:
+            account_id = acct_list[0].m_strAccountID
+
+    if not account_id:
+        print("未找到有效账号，跳过收益播报")
+        return
+
+    positions = C.get_trade_detail_data(account_id, "stock", "position")
+    if not positions:
+        _notify("【收益播报】空仓", f"账号 {account_id} 当前无持仓")
+        return
+
+    # 2. 构建持仓数据 DataFrame
+    data_list = []
+    total_market_value = 0.0
+    total_profit = 0.0
+    
+    print(f"********** 持仓信息打印开始 {account_id} **********")
+    for pos in positions:
+        stock_code = f"{pos.m_strInstrumentID}.{pos.m_strExchangeID}"
+        stock_name = pos.m_strInstrumentName
+        price = pos.m_dLastPrice
+        cost = pos.m_dOpenPrice
+        amount = pos.m_dMarketValue
+        vol = pos.m_nVolume
+        profit = pos.m_dFloatProfit
+        ratio = pos.m_dProfitRate
+        
+        # 计算涨跌幅 (避免除零)
+        ret_pct = (price / cost - 1) * 100 if cost != 0 else 0.0
+        
+        total_market_value += amount
+        total_profit += profit
+        
+        data_list.append({
+            'stock': stock_name,
+            'code': stock_code,
+            'price': price,
+            'cost': cost,
+            'amount': amount,
+            'ratio': ratio,
+            'profit': profit
+        })
+        
+        print(f"股票: {stock_code}")
+        print(f"股票名: {stock_name}")
+        print(f"成本价: {cost:.2f}")
+        print(f"现价: {price:.2f}")
+        print(f"涨跌幅: {ret_pct:.2f}%")
+        print(f"持仓: {vol}")
+        print(f"市值: {amount:.2f}")
+        print("--------------------------------------")
+    
+    print(f"总市值：{total_market_value:.2f}")
+    print("********** 持仓信息打印结束 **********")
+
+    # 3. 生成 Markdown 报告推送
+    num = len(data_list)
+    
+    # 格式化总盈亏颜色
+    profit_color = "info" if total_profit > 0 else "warning" # info=绿(涨)/warning=橙(跌) 在企业微信通常对应颜色
+    # 在Markdown中简单处理
+    profit_str = f"{total_profit:.2f}"
+    if total_profit > 0:
+        profit_str = f"<font color='info'>+{total_profit:.2f}</font>"
+    else:
+        profit_str = f"<font color='warning'>{total_profit:.2f}</font>"
+
+    markdown = f"""
+## 股票持仓报告 ({_get_today_str(C)})
+"""
+    for item in data_list:
+        stock = item['stock']
+        price = item['price']
+        cost = item['cost']
+        amount = item['amount']
+        ratio = item['ratio']
+        profit = item['profit']
+        
+        ratio_pct = ratio * 100
+        ratio_str = f"{ratio_pct:.2f}%"
+        if ratio > 0:
+            ratio_str = f"<font color='info'>+{ratio_str}</font>"
+        else:
+            ratio_str = f"<font color='warning'>{ratio_str}</font>"
+            
+        item_profit_str = f"{profit:.2f}"
+        if profit > 0:
+            item_profit_str = f"<font color='info'>+{item_profit_str}</font>"
+        else:
+            item_profit_str = f"<font color='warning'>{item_profit_str}</font>"
+            
+        markdown += f"""
+**{stock}**
+├─ 当前价：{price:.2f}
+├─ 成本价：{cost:.2f}
+├─ 持仓额：{amount:.2f}
+├─ 盈亏率：{ratio_str}
+└─ 当日盈亏：{item_profit_str}
+"""
+    
+    markdown += f"""
+---
+**持仓统计**
+总持仓数：{num} 只
+总盈亏额：{profit_str}
+"""
+    messager.send_message(markdown)
+
+
 def _get_today_str(C):
     if hasattr(C, "today"):
         v = _to_yyyymmdd(C.today)
@@ -482,6 +608,12 @@ def post_market_download(C):
     g.post_ran_date = today_str
 
     t0 = time.time()
+    # 打印每日收益
+    try:
+        print_daily_profit(C)
+    except Exception as e:
+        _notify("【收益播报】异常", str(e))
+    
     a_share_pool = _get_stock_pool(C)
     smallcap_pool = _get_stock_pool_smallcap(C)
     etf_pool = _get_stock_pool_etf(C)
@@ -530,7 +662,6 @@ def init(C):
     except Exception:
         pass
 
-    C.run_time("precheck_and_fix", "1nDay", "2025-03-01 09:00:00", "SH")
     C.run_time("post_market_download", "1nDay", "2025-03-01 16:00:00", "SH")
 
     try:

@@ -66,9 +66,9 @@ def init(context: Any):
         # 14:30 pm 检查需要卖出的持仓
         context.runner.run_daily("14:30", trade_afternoon_func)
         # 14:50 pm 检查当日是否需要一键清仓
-        context.runner.run_daily("14:50", close_account_func)    
-        # 15:05 pm 每日收盘后打印一次持仓
-        context.runner.run_daily("14:59", print_position_info_func)
+        context.runner.run_daily("14:50", close_account_func)
+        context.runner.run_daily("15:00", send_account_info_close_func)
+
         # -------------------每周执行任务 --------------------------------
         # 每周做一次调仓动作
         context.runner.run_weekly(1, "10:30", weekly_adjustment_func)
@@ -90,8 +90,8 @@ def init(context: Any):
         context.run_time("close_account_func","1nDay","2025-03-01 14:50:00","SH")
         # 14:55 pm 检查是否触发逃顶风控
         context.run_time("check_escape_top_func","1nDay","2025-03-01 14:55:00","SH")
-        # 15:05 pm 每日收盘后打印一次持仓
-        context.run_time("print_position_info_func","1nDay","2025-03-01 15:05:00","SH")
+        context.run_time("send_account_info_close_func","1nDay","2025-03-01 15:00:00","SH")
+
         # 15:10 pm 每日收盘后打印一次候选股票池
         context.run_time("log_target_list_info","1nDay","2025-03-01 15:10:00","SH")
         
@@ -213,7 +213,6 @@ class TradingStrategy:
             return
 
         if not context.do_back_test:
-            messager.send_positions(context)
             messager.send_account_info(context)
 
 
@@ -1209,44 +1208,7 @@ class TradingStrategy:
                     self.close_position(context, stock)
                     print(f"空仓日平仓，卖出股票 {stock}。")
 
-    def print_position_info(self, context: Any):
-        """
-        打印当前持仓详细信息，包括股票代码、成本价、现价、涨跌幅、持仓股数和市值
 
-        参数:
-            context: 聚宽平台传入的交易上下文对象
-        """
-        # TODO 这里其实可以使用持仓统计对象，有更多统计相关数据
-        self.positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
-        self.hold_list = [self.codeOfPosition(position) for position in self.positions]
-
-        if self.positions:
-            print(f"********** 持仓信息打印开始 {context.account}**********")
-            messager.send_positions(context)
-            messager.send_account_info(context)
-            total = 0
-            for position in self.positions:
-                cost: float = position.m_dOpenPrice
-                price: float = position.m_dLastPrice
-                ret: float = 100 * (price / cost - 1) if cost != 0 else 0.0  # 避免除以零错误
-                value: float = position.m_dMarketValue
-                amount: int = position.m_nVolume
-                code = self.codeOfPosition(position)
-                print(f"股票: {self.codeOfPosition(position)}")
-                print(f"股票名: {context.get_stock_name(code)}")
-                print(f"成本价: {cost:.2f}")
-                print(f"现价: {price:.2f}")
-                print(f"涨跌幅: {ret:.2f}%")
-                print(f"持仓: {amount}")
-                print(f"市值: {value:.2f}")
-                print("--------------------------------------")
-                total += value
-            print(f"总市值：{total:.2f}")
-            print("********** 持仓信息打印结束 **********")
-        else:
-            print("**********没有持仓信息**********")
-            messager.sendMsg("持仓状态：空仓")
-            messager.send_account_info(context)
 
 # 创建全局策略实例，策略入口处使用该实例
 strategy = TradingStrategy()
@@ -1349,15 +1311,16 @@ def close_account_func(context: Any):
     print('收盘前检查是否需要清仓...')
     strategy.close_account(context)
 
+def send_account_info_close_func(context: Any):
+    accounts = get_trade_detail_data(context.account, 'stock', 'account')
+    for dt in accounts:
+        msg = f'总资产: {dt.m_dBalance:.2f},\n总市值: {dt.m_dInstrumentValue:.2f},\n' + f'可用金额: {dt.m_dAvailable:.2f},\n持仓总盈亏: {dt.m_dPositionProfit:.2f}'
+        print(msg)
+        messager.sendMsg(msg)
+        break
 
-def print_position_info_func(context: Any):
-    """
-    包装调用策略实例的 print_position_info 方法
 
-    参数:
-        context: 聚宽平台传入的交易上下文对象
-    """
-    strategy.print_position_info(context)
+
     
 def log_target_list_info(context: Any):
     """
@@ -1575,66 +1538,7 @@ class Messager:
         for dt in accounts:
             self.sendMsg(f'总资产: {dt.m_dBalance:.2f},\n总市值: {dt.m_dInstrumentValue:.2f},\n' + f'可用金额: {dt.m_dAvailable:.2f},\n持仓总盈亏: {dt.m_dPositionProfit:.2f}')
         
-    def send_positions(self, context):
-        if context.do_back_test:
-            return
-        positions = get_trade_detail_data(context.account, 'STOCK', 'POSITION')
-        df_result = pd.DataFrame(columns=['stock', 'price', 'open_price', 'amount', 'ratio', 'profit'])
-        for position in positions:
-            df_result = df_result.append({
-            'stock': position.m_strInstrumentName,
-            'price': position.m_dLastPrice,
-            'open_price': position.m_dOpenPrice,
-            'amount': position.m_dMarketValue,
-            'ratio': position.m_dProfitRate,
-            'profit': position.m_dFloatProfit,
-            }, ignore_index=True)
 
-        markdown = """
-        ## 股票持仓报告
-        """
-        num = len(df_result)
-        total_profit = df_result['profit'].sum()
-        if total_profit > 0:
-            total_profit = f"<font color='info'>{total_profit:.2f}</font>"
-        else:
-            total_profit = f"<font color='warning'>{total_profit:.2f}</font>"
-
-        for index, row in df_result.iterrows():
-            row_str = self.get_position_markdown(row)
-            markdown += row_str
-        markdown += f"""
-        ---
-        **持仓统计**
-        总持仓数：{num} 只
-        总盈亏额：{total_profit}
-        """
-        self.send_message(self.webhook1, markdown)
-
-    def get_position_markdown(self, position):
-        stock = position['stock']
-        price = position['price']
-        open_price = position['open_price']
-        amount = position['amount']
-        ratio = position['ratio']
-        ratio_str = ratio * 100
-        if ratio_str > 0:
-            ratio_str = f"<font color='info'>{ratio_str:.2f}%</font>"
-        else:
-            ratio_str = f"<font color='warning'>{ratio_str:.2f}%</font>"
-        profit = position['profit']
-        if profit > 0:
-            profit = f"<font color='info'>{profit:.2f}</font>"
-        else:
-            profit = f"<font color='warning'>{profit:.2f}</font>"
-        return f"""
-    **{stock}**
-    ├─ 当前价：{price:.2f}
-    ├─ 成本价：{open_price:.2f}
-    ├─ 持仓额：{amount:.2f}
-    ├─ 盈亏率：{ratio_str}
-    └─ 当日盈亏：{profit}
-        """
 messager = Messager()
 class Log:
     def debug(*args):

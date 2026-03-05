@@ -743,22 +743,7 @@ def sell_func(C):
             messager.send_message(f"止损止盈卖出 {s} {C.get_stock_name(s)}")
             print('———————————————————————————————————')
 
-def print_holdings_func(C):
-    """收盘后打印持仓信息函数"""
-    print("【收盘持仓】开始打印持仓信息...")
-    positions = get_trade_detail_data(C.account, 'STOCK', 'POSITION')
-    total_asset = get_account_total_asset(C)
-    available_cash = get_account_money(C)
-    
-    msg = f"今日收盘总资产: {total_asset:.2f}元"
-    if positions:
-        holdings = [f"{codeOfPosition(p)} {C.get_stock_name(codeOfPosition(p))}" for p in positions]
-        msg += f", 持仓: {', '.join(holdings)}"
-    else:
-        msg += ", 无持仓"
-    
-    print(msg)
-    messager.send_message(msg)
+
 
 # -------------------------------------------------------------------------------------------
 # 调度与初始化
@@ -798,6 +783,14 @@ class TaskRunner:
                 func(self.context)
                 task.last_executed = bar_time.date()
 
+def send_account_info_close_func(C):
+    accounts = get_trade_detail_data(C.account, 'stock', 'account')
+    for dt in accounts:
+        msg = f"总资产: {dt.m_dBalance:.2f},\n总市值: {dt.m_dInstrumentValue:.2f},\n可用金额: {dt.m_dAvailable:.2f},\n持仓总盈亏: {dt.m_dPositionProfit:.2f}"
+        print(msg)
+        messager.send_message(msg)
+        break
+
 def init(C):
     """初始化函数"""
     print("【初始化】策略开始初始化...")
@@ -823,14 +816,16 @@ def init(C):
         C.runner.run_daily("09:26", buy_func) # 09:25:41 round to 09:26 for backtest bars
         C.runner.run_daily("11:25", sell_func)
         C.runner.run_daily("14:50", sell_func)
-        C.runner.run_daily("15:00", print_holdings_func)
+        C.runner.run_daily("15:00", send_account_info_close_func)
+
     else:
         # 实盘时间
         C.run_time("get_stock_list_func", "1nDay", "2025-03-01 09:16:00", "SH")
         C.run_time("buy_func", "1nDay", "2025-03-01 09:25:41", "SH")
         C.run_time("sell_func", "1nDay", "2025-03-01 11:25:00", "SH")
         C.run_time("sell_func", "1nDay", "2025-03-01 14:50:00", "SH")
-        C.run_time("print_holdings_func", "1nDay", "2025-03-01 15:00:00", "SH")
+        C.run_time("send_account_info_close_func", "1nDay", "2025-03-01 15:00:00", "SH")
+
         
     print("【初始化】策略初始化完成")
 
