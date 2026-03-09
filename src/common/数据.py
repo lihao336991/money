@@ -14,6 +14,16 @@ import requests
 class G:
     pass
 
+# 设置账号
+# 腾腾实盘
+MY_ACCOUNT = "190200051469"
+MY_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618"
+# 慕凡实盘
+# MY_ACCOUNT = "170100005993"
+# MY_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=2a336b4c-c38e-4ae3-9ff6-f14f175b4f73"
+# 李浩的实盘
+# MY_ACCOUNT = '190200026196'
+# MY_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=599439e6-4132-48b6-a05a-c1fbb32e33d8"
 
 g = G()
 
@@ -75,8 +85,10 @@ class Messager:
     def set_is_test(self, is_test):
         self.is_test = is_test
 
-    def send_message(self, text_content):
-        if not self.hook_url:
+    def send_message(self, text_content, webhook_url=None):
+        if not webhook_url:
+            webhook_url = self.hook_url
+        if not webhook_url:
             return
         if self.is_test:
             print(f"【消息推送(测试)】{text_content}")
@@ -85,7 +97,7 @@ class Messager:
             current_time = datetime.datetime.now().strftime("[%Y-%m-%d %H:%M:%S] ")
             content = current_time + str(text_content)
             payload = {"msgtype": "text", "text": {"content": content}}
-            requests.post(self.hook_url, json=payload, timeout=5)
+            requests.post(webhook_url, json=payload, timeout=5)
         except Exception as e:
             print(f"【消息推送失败】错误: {e}")
 
@@ -122,25 +134,16 @@ def print_daily_profit(C):
     打印账户持仓及当日收益报告
     逻辑迁移自：小市值改良版/实盘.py
     """
-    if not hasattr(C, "get_trade_detail_data"):
-        print("非QMT交易环境，跳过收益播报")
-        return
-
     # 1. 获取账号 (兼容多策略)
     # QMT中 C.get_trade_detail_data 需要 account_id
     # 这里尝试从 C 中获取，或遍历所有账号
-    account_id = getattr(C, "account", "")
-    if not account_id:
-        # 尝试获取第一个可用账号
-        acct_list = C.get_trade_detail_data("", "stock", "account")
-        if acct_list:
-            account_id = acct_list[0].m_strAccountID
+    account_id = MY_ACCOUNT
 
     if not account_id:
         print("未找到有效账号，跳过收益播报")
         return
 
-    positions = C.get_trade_detail_data(account_id, "stock", "position")
+    positions = get_trade_detail_data(account_id, "stock", "position")
     if not positions:
         _notify("【收益播报】空仓", f"账号 {account_id} 当前无持仓")
         return
@@ -197,12 +200,12 @@ def print_daily_profit(C):
     # 在Markdown中简单处理
     profit_str = f"{total_profit:.2f}"
     if total_profit > 0:
-        profit_str = f"<font color='info'>+{total_profit:.2f}</font>"
+        profit_str = f"+{total_profit:.2f}"
     else:
-        profit_str = f"<font color='warning'>{total_profit:.2f}</font>"
+        profit_str = f"{total_profit:.2f}"
 
     markdown = f"""
-## 股票持仓报告 ({_get_today_str(C)})
+股票持仓报告 ({_get_today_str(C)})
 """
     for item in data_list:
         stock = item['stock']
@@ -215,18 +218,18 @@ def print_daily_profit(C):
         ratio_pct = ratio * 100
         ratio_str = f"{ratio_pct:.2f}%"
         if ratio > 0:
-            ratio_str = f"<font color='info'>+{ratio_str}</font>"
+            ratio_str = f"+{ratio_str}"
         else:
-            ratio_str = f"<font color='warning'>{ratio_str}</font>"
+            ratio_str = f"{ratio_str}"
             
         item_profit_str = f"{profit:.2f}"
         if profit > 0:
-            item_profit_str = f"<font color='info'>+{item_profit_str}</font>"
+            item_profit_str = f"+{item_profit_str}"
         else:
-            item_profit_str = f"<font color='warning'>{item_profit_str}</font>"
+            item_profit_str = f"{item_profit_str}"
             
         markdown += f"""
-**{stock}**
+{stock}
 ├─ 当前价：{price:.2f}
 ├─ 成本价：{cost:.2f}
 ├─ 持仓额：{amount:.2f}
@@ -236,11 +239,11 @@ def print_daily_profit(C):
     
     markdown += f"""
 ---
-**持仓统计**
+持仓统计
 总持仓数：{num} 只
 总盈亏额：{profit_str}
 """
-    messager.send_message(markdown)
+    messager.send_message(markdown, webhook_url=MY_WEBHOOK)
 
 
 def _get_today_str(C):
@@ -611,11 +614,6 @@ def post_market_download(C):
     g.post_ran_date = today_str
 
     t0 = time.time()
-    # 打印每日收益
-    try:
-        print_daily_profit(C)
-    except Exception as e:
-        _notify("【收益播报】异常", str(e))
     
     a_share_pool = _get_stock_pool(C)
     smallcap_pool = _get_stock_pool_smallcap(C)
@@ -653,6 +651,12 @@ def post_market_download(C):
     _notify("【盘后补全】完成", f"耗时={elapsed:.2f}s\n" + "\n".join(results_lines))
 
 
+def print_daily_profit_func(C):    
+    try:
+        print_daily_profit(C)
+    except Exception as e:
+        _notify("【收益播报】异常", str(e))
+
 def init(C):
     messager.set_is_test(getattr(C, "do_back_test", False))
 
@@ -668,10 +672,12 @@ def init(C):
     except Exception:
         pass
 
+    C.run_time("print_daily_profit_func", "1nDay", "2025-03-01 15:00:00", "SH")
     C.run_time("post_market_download", "1nDay", "2025-03-01 16:00:00", "SH")
 
     try:
         precheck_and_fix(C)
+        print_daily_profit_func(C)
     except Exception as e:
         _notify("【前置检查】init 触发失败", str(e))
 

@@ -25,10 +25,13 @@ def init(context):
     # if not context.do_back_test:
     # context.run_time("record_smoothed_basis", "1nDay", "2025-01-01 14:55:00", "SH")
     print(">>> 7日加权基差监控已启动")
+
         
     # 初始化时间管理器
     context.tm = TimeManager(context)
     context.runner = TaskRunner(context)
+
+    context.run_time("record_smoothed_basis_silent","1nDay","2025-03-01 11:25:00","SH")
     context.run_time("record_smoothed_basis","1nDay","2025-03-01 14:55:00","SH")
 
     g.cache_file = 'basis_monitor_status.json'
@@ -51,10 +54,12 @@ def init(context):
     g.breadth_trigger = 0.3
     g.basis_recovery = -1.2        
     g.breadth_recovery = 0.5
+    g.window = 7                # 监控基差 7日窗口
 
-g.window = 7                # 监控基差 7日窗口
+def record_smoothed_basis_silent(context):
+    record_smoothed_basis(context, silent=True)
 
-def record_smoothed_basis(context):
+def record_smoothed_basis(context, silent=False):
     # 1. 直接获取连续主力合约代码 (规避换月数据断层)
     # 备注：IML0 是中金所 IM 连续主力
     main_continuous = 'IM.IF'
@@ -105,13 +110,16 @@ def record_smoothed_basis(context):
     # --- 计算微盘股广度 ---
     breadth = get_micro_breadth(context)
     
-    print(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}% | 微盘广度: {breadth:.2%}")
+    messager.sendLog(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}% | 微盘广度: {breadth:.2%} （注意，基差低于-2%，微盘广度低于30%时，将触发流动性风险警告!）")
 
     # 状态机切换逻辑
     risk_trigger = (wma_basis < g.basis_trigger and breadth < g.breadth_trigger)
     risk_recovery = (wma_basis > g.basis_recovery or breadth > g.breadth_recovery)
 
     today = context.tm.now.date()
+
+    if silent:
+        return
 
     if not g.is_risk_warning and risk_trigger:
         g.is_risk_warning = True
@@ -461,7 +469,7 @@ class Messager:
     is_test = False
     def __init__(self):
         # 消息通知
-        self.webhook1 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618'
+        self.webhook1 = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b40ebf86-59ec-475c-acf5-d4db45792618'
     def set_is_test(self, is_test):
         self.is_test = is_test
     def send_message(self, webhook, message):
@@ -482,8 +490,7 @@ class Messager:
             print('消息发送失败')
     # 发送消息（支持控制只在开盘期间推送）
     def sendLog(self, message):
-        if is_trading():
-            self.send_message(self.webhook1, message)
+        self.send_message(self.webhook1, message)
         print(message)
 
 
