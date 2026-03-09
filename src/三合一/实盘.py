@@ -722,13 +722,13 @@ def sell_func(C):
             continue
             
         # 获取当前价格和涨停价
-        tick = C.get_market_data_ex(['close'], [s], period="1m", count=1)
+        tick = C.get_market_data_ex(['close'], [s], period="1m", count=1, dividend_type="follow", fill_data=False, subscribe=True)
         if s not in tick or tick[s].empty:
             continue
         last_price = tick[s]['close'].iloc[0]
         
         # 获取昨日收盘价计算涨停价
-        day_data = C.get_market_data_ex(['close'], [s], period="1d", count=2, end_time=C.yesterday)
+        day_data = C.get_market_data_ex(['close'], [s], period="1d", count=2, end_time=C.yesterday, dividend_type="follow", fill_data=False, subscribe=False)
         if s not in day_data or len(day_data[s]) < 1:
              continue
         last_close = day_data[s]['close'].iloc[-1]
