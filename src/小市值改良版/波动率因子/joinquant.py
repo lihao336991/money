@@ -141,6 +141,9 @@ class TradingStrategy:
         self.HV_control: bool = False              # 是否启用成交量异常检测
         self.HV_duration: int = 120                # 检查成交量时参考的历史天数
         self.HV_ratio: float = 0.9                 # 当天成交量超过历史最高成交量的比例（如0.9即90%）
+        self.vol_window: int = 120
+        self.cap_weight: float = 1.0
+        self.vol_weight: float = 0
 
         # 状态机字典，记录交易信号和当前风险水平
         self.state: Dict[str, Any] = {
@@ -148,6 +151,27 @@ class TradingStrategy:
             'sell_signal': False,
             'risk_level': 'normal'
         }
+
+    def _calc_volatility(self, context: Any, stock_list: List[str]) -> Dict[str, float]:
+        if not stock_list:
+            return {}
+        df = DataHelper.get_price_safe(
+            stock_list,
+            end_date=context.previous_date,
+            frequency="daily",
+            fields=["close"],
+            count=self.vol_window + 1,
+            panel=False,
+            fill_paused=False
+        )
+        if df is None or df.empty or "code" not in df.columns or "close" not in df.columns:
+            return {}
+        tmp = df.reset_index()
+        time_col = tmp.columns[0]
+        tmp = tmp.sort_values(["code", time_col])
+        tmp["ret"] = tmp.groupby("code")["close"].pct_change()
+        vol = tmp.groupby("code")["ret"].std()
+        return vol.to_dict()
 
     def initialize(self, context: Any) -> None:
         """
@@ -272,14 +296,22 @@ class TradingStrategy:
         initial_list = self.filter_limitdown_stock(context, initial_list) # 过滤当日跌停（未持仓时）的股票
 
         # 利用基本面查询获取股票代码和EPS数据，并按照市值升序排序
-        q = query(valuation.code, indicator.eps) \
+        q = query(valuation.code, indicator.eps, valuation.market_cap) \
             .filter(valuation.code.in_(initial_list)) \
             .order_by(valuation.market_cap.asc())
         df = get_fundamentals(q)
-        stock_list: List[str] = list(df.code)
-        stock_list = stock_list[:100]  # 限制数据规模，防止一次处理数据过大
-        # 取前2倍目标持仓股票数作为候选池
-        final_list: List[str] = stock_list[:2 * self.stock_num]
+        if df is None or df.empty:
+            return []
+        df = df.head(100).copy()
+        vols = self._calc_volatility(context, list(df["code"]))
+        df["volatility"] = df["code"].map(vols)
+        df["volatility"] = df["volatility"].fillna(df["volatility"].max() if df["volatility"].notna().any() else 1e9)
+        df["cap_rank"] = df["market_cap"].rank(method="average", ascending=True)
+        df["vol_rank"] = df["volatility"].rank(method="average", ascending=True)
+        df["score"] = self.cap_weight * df["cap_rank"] + self.vol_weight * df["vol_rank"]
+        df = df.sort_values(by=["score", "market_cap"], ascending=[True, True])
+        stock_list: List[str] = list(df["code"])
+        final_list: List[str] = stock_list[: 2 * self.stock_num]
         log.info(f"初选候选股票: {final_list}")
 
         # 查询并输出候选股票的财务信息（如财报日期、营业收入、EPS）

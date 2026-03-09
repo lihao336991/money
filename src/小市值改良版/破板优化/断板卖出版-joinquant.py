@@ -131,7 +131,7 @@ class TradingStrategy:
         self.not_buy_again: List[str] = []           # 当天已买入的股票列表，避免重复下单
 
         # 策略交易及风控的参数
-        self.stock_num: int = 7                    # 每次调仓目标持仓股票数量
+        self.stock_num: int = 20                    # 每次调仓目标持仓股票数量
         self.up_price: float = 100.0               # 股票价格上限过滤条件（排除股价超过此值的股票）
         self.reason_to_sell: str = ''              # 记录卖出原因（例如：'limitup' 涨停破板 或 'stoploss' 止损）
         self.stoploss_strategy: int = 3            # 止损策略：1-个股止损；2-大盘止损；3-联合止损策略
@@ -148,6 +148,20 @@ class TradingStrategy:
             'sell_signal': False,
             'risk_level': 'normal'
         }
+        self.limitup_monitor_date = None
+        self.limitup_open_ok = set()
+        self.limitup_watchlist = set()
+        self.limitup_high_limit = {}
+        self.limitup_break_count = {}
+        self.limitup_sell_sent = set()
+
+    def reset_limitup_monitor_state(self) -> None:
+        self.limitup_monitor_date = None
+        self.limitup_open_ok.clear()
+        self.limitup_watchlist.clear()
+        self.limitup_high_limit.clear()
+        self.limitup_break_count.clear()
+        self.limitup_sell_sent.clear()
 
     def initialize(self, context: Any) -> None:
         """
@@ -245,6 +259,85 @@ class TradingStrategy:
 
         # 根据当前日期判断是否为空仓日（例如04月或01月时资金再平衡）
         self.no_trading_today_signal = self.today_is_between(context)
+        self.reset_limitup_monitor_state()
+
+    def monitor_limitup_break(self, context: Any) -> None:
+        positions = context.portfolio.positions
+        if not positions:
+            self.reset_limitup_monitor_state()
+            return
+
+        current_dt = getattr(context, "current_dt", None)
+        current_date = current_dt.date() if current_dt is not None else None
+        if current_date is None:
+            return
+
+        if self.limitup_monitor_date != current_date:
+            self.reset_limitup_monitor_state()
+            self.limitup_monitor_date = current_date
+
+        current_data = get_current_data()
+        candidates = set(positions.keys()) & set(self.yesterday_HL_list)
+        for stock in candidates:
+            cd = current_data.get(stock)
+            if cd is None:
+                continue
+            if cd.paused:
+                continue
+
+            try:
+                last_price = cd.last_price
+                high_limit = cd.high_limit
+                day_open = cd.day_open
+                pre_close = cd.pre_close
+            except Exception:
+                continue
+
+            if last_price is None or high_limit is None:
+                continue
+
+            if stock not in self.limitup_open_ok:
+                if pre_close and day_open and pre_close > 0:
+                    if (day_open / pre_close - 1) > 0.08:
+                        self.limitup_open_ok.add(stock)
+                if stock not in self.limitup_open_ok:
+                    continue
+            
+            touched_limit = False
+            if last_price >= high_limit:
+                touched_limit = True
+            elif day_open is not None and day_open >= high_limit:
+                touched_limit = True
+
+            if touched_limit:
+                self.limitup_watchlist.add(stock)
+                self.limitup_high_limit[stock] = high_limit
+                if last_price < high_limit:
+                    self.limitup_break_count[stock] = 1
+                else:
+                    self.limitup_break_count[stock] = 0
+                continue
+
+            if stock in self.limitup_watchlist:
+                watch_high_limit = self.limitup_high_limit.get(stock, high_limit)
+                if last_price < watch_high_limit:
+                    if stock in self.limitup_sell_sent:
+                        continue
+                    self.limitup_break_count[stock] = self.limitup_break_count.get(stock, 0) + 1
+                    if self.limitup_break_count[stock] < 2:
+                        continue
+                    pos = positions.get(stock)
+                    if pos is None:
+                        continue
+                    log.info(f"股票 {stock} 涨停破板，触发卖出操作。")
+                    self.close_position(pos)
+                    self.reason_to_sell = 'limitup'
+                    self.limitup_sell_sent.add(stock)
+                    self.limitup_watchlist.discard(stock)
+                    self.limitup_high_limit.pop(stock, None)
+                    self.limitup_break_count.pop(stock, None)
+                else:
+                    self.limitup_break_count[stock] = 0
 
     def get_stock_list(self, context: Any) -> List[str]:
         """
@@ -844,3 +937,7 @@ def initialize(context: Any) -> None:
     run_daily(close_account_func, time='14:50')
     # run_weekly 的星期参数，此处传入 5 表示星期五
     run_weekly(print_position_info_func, 5, time='15:10')
+
+
+def handle_data(context: Any, data: Any) -> None:
+    strategy.monitor_limitup_break(context)

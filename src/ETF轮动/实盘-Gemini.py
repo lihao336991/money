@@ -644,12 +644,12 @@ def filter_etf(C):
                 score = 0
                 if not C.do_back_test: log.info(f" > 过滤: {etf} 触发暴跌保护")
 
-            if max(drop_1, drop_2) > 1.08:
+            if max(drop_2, drop_3) > 1.09:
                 score = 0
                 if not C.do_back_test: log.info(f" > 过滤: {etf} 触发涨幅过大保护")
 
         # 6. 加入候选列表
-        if 0 < score < 5:
+        if 0 < score < 6:
             scores.append({'code': etf, 'score': score, 'annualized_returns': annualized_returns, 'r2': r2})
         else:
             log.info(f" > 过滤: {etf} 得分异常 ({score:.4f})")

@@ -61,6 +61,7 @@ class Messager:
             print('消息发送失败')
     # 发送消息（支持控制只在开盘期间推送）
     def sendLog(self, message):
+        self.send_message(self.webhook1, message)
         print(message)
 
     def sendMsg(self, message):
