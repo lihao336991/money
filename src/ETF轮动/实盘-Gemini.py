@@ -196,11 +196,11 @@ def passorder_live(C, op_type, code, price, volume, remark):
     
     log.info(f"【准备下单】Op: {op_type}, Code: {code}, Price: {price}, Vol: {volume}, ID: {unique_id}")
 
-    # 假设 23=买入, 24=卖出, 7=限价，5=最新价
+    # 假设 23=买入, 24=卖出, 7=限价，4=卖1价，确保立即买进
     if op_type == 23: # 买入
         try:
             # 1101 表示按股数下单
-            passorder(23, 1101, C.account_id, code, 5, -1, volume, remark, 1, unique_id, C)
+            passorder(23, 1101, C.account_id, code, 4, -1, volume, remark, 1, unique_id, C)
             messager.send_message(f"【实盘交易】执行 {remark}: {code}, 价格: {price:.3f}, 数量: {volume}")
         except Exception as e:
             log.error(f'买入股票(实盘)失败: {e}')

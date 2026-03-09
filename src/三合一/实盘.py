@@ -145,11 +145,20 @@ def get_account_total_asset(C):
     total_market_value = sum(p.m_dMarketValue for p in positions)
     return available_cash + total_market_value
 
-def open_position(C, security, value=0):
+def open_position(C, security, value=0, current_price=0):
     """实盘模式下开仓"""
     print("买入股票(实盘):", security, C.get_stock_name(security), value)
     lastOrderId = str(uuid.uuid4())
-    passorder(23, 1102, C.account, security, 5, -1, value, lastOrderId, 1, lastOrderId, C)
+    # 2 表示卖3，比最新价高3档，以便更高概率成交
+    # https://dict.thinktrader.net/innerApi/enum_constants.html?id=8G5l5A#prtype-%E4%B8%8B%E5%8D%95%E9%80%89%E4%BB%B7%E7%B1%BB%E5%9E%8B
+    # 根据股价动态调整委托档位。
+    # 默认是2（卖3），如果股价低于10，调整为3（卖2），如果股价低于5，调整为4（卖1）
+    pr_type = 2
+    if current_price < 5:
+        pr_type = 4
+    elif current_price < 10:
+        pr_type = 3
+    passorder(23, 1102, C.account, security, pr_type, -1, value, lastOrderId, 1, lastOrderId, C)
 
 def close_position(C, stock):
     """平仓（清仓）"""
@@ -701,7 +710,7 @@ def buy_func(C):
                 if C.do_back_test:
                      order_target_value(s, value, C, C.account)
                 else:
-                     open_position(C, s, value)
+                     open_position(C, s, value, current_price)
                 
                 print('买入' + s)
                 messager.send_message(f"买入 {s} {C.get_stock_name(s)}, 集合竞价价格={stock_data['auction_price']:.2f}, 挂单价格={current_price:.2f}, 金额={value:.2f}")
