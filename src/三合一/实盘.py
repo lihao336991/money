@@ -816,7 +816,7 @@ def init(C):
         C.yesterday = get_previous_trading_day(C, C.today.date()).strftime("%Y%m%d")
 
     # 周末检查
-    if not C.do_back_test and datetime.datetime.now().weekday() >= 5:
+    if not C.do_back_test and not is_trading(C.context):
         print('当前日期为周末，不执行任务')
         return
     
@@ -859,3 +859,11 @@ def handlebar(C):
         if C.do_back_test:
             C.yesterday = get_previous_trading_day(C, C.today.date()).strftime("%Y%m%d")
             C.runner.check_tasks(C.today)
+
+
+
+# 前置增加开盘检测
+def is_trading(context):
+    current_weekday = datetime.datetime.now().weekday()
+    is_weekend = current_weekday >= 5  # 5表示周六，6表示周日
+    return (context.get_instrumentdetail('600000.SH')['IsTrading'] or context.get_instrumentdetail('600036.SH')['IsTrading'] or context.get_instrumentdetail('600519.SH')['IsTrading']) and not is_weekend

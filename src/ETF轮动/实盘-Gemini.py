@@ -607,6 +607,9 @@ def filter_etf(C):
         closes_history = df['close'].values[-g.m_days:]
         prices = np.append(closes_history, current_price)
         
+        # 标准化价格精度，统一保留4位小数，确保与聚宽计算一致
+        prices = np.round(prices.astype(float), 4)
+        
         log.info(f"【排查】{etf} closes_history长度: {len(closes_history)}, prices总长度: {len(prices)}")
 
         log.info(f"{etf} 价格list {prices}")
@@ -712,9 +715,12 @@ def orderError_callback(context, orderArgs, errMsg):
     messager.send_message(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
     
 
+
 # 前置增加开盘检测
-def is_trading(ContextInfo):
-    return ContextInfo.get_instrumentdetail('600000.SH')['IsTrading'] or ContextInfo.get_instrumentdetail('600036.SH')['IsTrading'] or ContextInfo.get_instrumentdetail('600519.SH')['IsTrading']
+def is_trading(context):
+    current_weekday = datetime.now().weekday()
+    is_weekend = current_weekday >= 5  # 5表示周六，6表示周日
+    return (context.get_instrumentdetail('600000.SH')['IsTrading'] or context.get_instrumentdetail('600036.SH')['IsTrading'] or context.get_instrumentdetail('600519.SH')['IsTrading']) and not is_weekend
 
 
 

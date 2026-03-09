@@ -1319,4 +1319,6 @@ def order_callback(context, orderInfo):
     
 # 前置增加开盘检测
 def is_trading(context):
-    return context.get_instrumentdetail('600000.SH')['IsTrading'] or context.get_instrumentdetail('600036.SH')['IsTrading'] or context.get_instrumentdetail('600519.SH')['IsTrading']
+    current_weekday = datetime.now().weekday()
+    is_weekend = current_weekday >= 5  # 5表示周六，6表示周日
+    return (context.get_instrumentdetail('600000.SH')['IsTrading'] or context.get_instrumentdetail('600036.SH')['IsTrading'] or context.get_instrumentdetail('600519.SH')['IsTrading']) and not is_weekend
