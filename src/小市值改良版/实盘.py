@@ -872,7 +872,7 @@ class TradingStrategy:
         lastOrderId = str(uuid.uuid4())
         g.orderIdMap[security] = lastOrderId
         
-        passorder(23, 1102, context.account, security, 5, -1, value, lastOrderId, 1, lastOrderId, context)
+        passorder(23, 1102, context.account, security, 4, -1, value, lastOrderId, 1, lastOrderId, context)
 
     def close_position(self, context, stock: Any):
         """
@@ -1256,9 +1256,9 @@ def init(context: Any):
         # 9:30 am 止盈止损检测
         context.run_time("sell_stocks_func","1nDay","2025-03-01 09:30:00","SH")
         # 14:30 pm 检查涨停破板，需要卖出的持仓
-        context.run_time("trade_afternoon_func","1nDay","2025-03-01 14:30:00","SH")
+        context.run_time("trade_afternoon_func","1nDay","2025-03-01 14:28:00","SH")
         # 14:50 pm 检查当日是否到达空仓日，需要一键清仓
-        context.run_time("close_account_func","1nDay","2025-03-01 14:50:00","SH")
+        context.run_time("close_account_func","1nDay","2025-03-01 14:48:00","SH")
         context.run_time("send_account_info_close_func","1nDay","2025-03-01 15:00:00","SH")
 
         # 15:10 pm 每日收盘后打印一次候选股票池
@@ -1266,9 +1266,9 @@ def init(context: Any):
         
         # -------------------每周执行任务 --------------------------------
         # 09:40 am 每周做一次调仓动作，尽量早，流动性充足
-        context.run_time("weekly_adjustment_func","7nDay","2025-05-08 09:40:00","SH")
+        context.run_time("weekly_adjustment_func","7nDay","2025-05-08 09:35:00","SH")
         # 09:50 am 每周调仓后买入股票
-        context.run_time("weekly_adjustment_buy_func","7nDay","2025-05-08 09:50:00","SH")
+        context.run_time("weekly_adjustment_buy_func","7nDay","2025-05-08 09:40:00","SH")
 
 
 def checkTask(context):

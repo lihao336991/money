@@ -32,7 +32,7 @@ def init(context):
     context.runner = TaskRunner(context)
 
     context.run_time("record_smoothed_basis_silent","1nDay","2025-03-01 11:25:00","SH")
-    context.run_time("record_smoothed_basis","1nDay","2025-03-01 14:55:00","SH")
+    context.run_time("record_smoothed_basis","1nDay","2025-03-01 14:50:00","SH")
 
     g.cache_file = 'basis_monitor_status.json'
     context.storage = Storage(context)
@@ -110,7 +110,7 @@ def record_smoothed_basis(context, silent=False):
     # --- 计算微盘股广度 ---
     breadth = get_micro_breadth(context)
     
-    messager.sendLog(f"主力连续: {main_continuous} | 实时基差: {curr_basis:.2f}% | 7日加权: {wma_basis:.2f}% | 微盘广度: {breadth:.2%} （注意，基差低于-2%，微盘广度低于30%时，将触发流动性风险警告!）")
+    messager.sendLog(f"主力连续: {main_continuous} \n 实时基差: {curr_basis:.2f}% \n 7日加权: {wma_basis:.2f}% \n 微盘广度: {breadth:.2%} \n（注意，基差低于-2%，微盘广度低于30%时，将触发流动性风险警告!）")
 
     # 状态机切换逻辑
     risk_trigger = (wma_basis < g.basis_trigger and breadth < g.breadth_trigger)

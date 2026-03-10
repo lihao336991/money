@@ -224,6 +224,8 @@ def filter_st_paused_stock(C, initial_list):
     
     print(f"【过滤ST停牌】开始处理 {len(initial_list)} 只股票...")
     
+    temp_results = []
+    
     for stock in initial_list:
         try:
             # 获取股票名称
@@ -242,24 +244,36 @@ def filter_st_paused_stock(C, initial_list):
 
             # 获取停牌状态
             is_paused = False
-            # try:
-            #     is_paused = C.is_suspended_stock(stock)
-            #     if is_paused:
-            #         paused_count += 1
-            # except Exception:
-            #     # 获取停牌状态失败，默认不停牌
-            #     pass
+            try:
+                is_paused = C.is_suspended_stock(stock)
+                if is_paused:
+                    paused_count += 1
+            except Exception:
+                # 获取停牌状态失败，默认不停牌
+                pass
             
-            if not is_st and not is_paused:
-                result.append(stock)
+            temp_results.append((stock, is_st, is_paused))
                 
         except Exception as e:
             error_count += 1
             if error_count <= 5:
                 print(f"【过滤ST停牌】{stock} 异常: {e}")
             pass
+    
+    # 检查停牌异常（早盘集合竞价期间可能全部返回True）
+    ignore_paused = False
+    if len(initial_list) > 100 and paused_count / len(initial_list) > 0.8:
+        print(f"【严重警告】检测到 {paused_count}/{len(initial_list)} ({(paused_count/len(initial_list)):.1%}) 只股票停牌，判定为数据源异常（如早盘9:15-9:25数据未到位），将跳过停牌过滤！")
+        ignore_paused = True
+
+    for stock, is_st, is_paused in temp_results:
+        if is_st:
+            continue
+        if is_paused and not ignore_paused:
+            continue
+        result.append(stock)
             
-    print(f"【过滤ST停牌】完成。ST: {st_count}, 停牌: {paused_count}, 名字缺失: {name_none_count}, 异常: {error_count}")
+    print(f"【过滤ST停牌】完成。ST: {st_count}, 停牌: {paused_count}, 名字缺失: {name_none_count}, 异常: {error_count}, 是否忽略停牌: {ignore_paused}")
     
     # 兜底逻辑：如果过滤后数量极少（<10）且原本数量很多（>100），可能是数据异常导致全部被杀
     if len(result) < 10 and len(initial_list) > 100:
@@ -829,10 +843,10 @@ def init(C):
 
     else:
         # 实盘时间
-        C.run_time("get_stock_list_func", "1nDay", "2025-03-01 09:20:00", "SH")
+        C.run_time("get_stock_list_func", "1nDay", "2025-03-01 09:20:10", "SH")
         C.run_time("buy_func", "1nDay", "2025-03-01 09:25:41", "SH")
-        C.run_time("sell_func", "1nDay", "2025-03-01 11:25:00", "SH")
-        C.run_time("sell_func", "1nDay", "2025-03-01 14:50:00", "SH")
+        C.run_time("sell_func", "1nDay", "2025-03-01 11:23:00", "SH")
+        C.run_time("sell_func", "1nDay", "2025-03-01 14:48:00", "SH")
         C.run_time("send_account_info_close_func", "1nDay", "2025-03-01 15:00:00", "SH")
 
         

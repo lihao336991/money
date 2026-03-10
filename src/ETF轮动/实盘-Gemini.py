@@ -321,8 +321,8 @@ def init(C):
     else:
         log.info('doing live - 注册实盘任务')
         # 实盘中使用平台 run_time 接口
-        C.run_time("execute_sell_logic","1nDay","2025-12-01 11:00:00","SH")
-        C.run_time("execute_buy_logic","1nDay","2025-12-01 11:03:00","SH")
+        C.run_time("execute_sell_logic","1nDay","2025-12-01 10:50:00","SH")
+        C.run_time("execute_buy_logic","1nDay","2025-12-01 10:55:00","SH")
         C.run_time("filter_etf","1nDay","2025-12-01 14:57:00","SH")
         C.run_time("send_account_info_close_func","1nDay","2025-12-01 15:00:00","SH")
 

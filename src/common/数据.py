@@ -14,16 +14,39 @@ import requests
 class G:
     pass
 
-# 设置账号
-# 腾腾实盘
-MY_ACCOUNT = "190200051469"
-MY_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618"
-# 慕凡实盘
-# MY_ACCOUNT = "170100005993"
-# MY_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=2a336b4c-c38e-4ae3-9ff6-f14f175b4f73"
-# 李浩的实盘
-# MY_ACCOUNT = '190200026196'
-# MY_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=599439e6-4132-48b6-a05a-c1fbb32e33d8"
+# ================= 账号配置 =================
+# ROLE 可选值: '小市值' | '三合一' | 'ETF轮动'
+# ROLE = '小市值'
+ROLE = '三合一'
+# ROLE = 'ETF轮动'
+
+CONFIGS = {
+    '小市值': {
+        'account': "190200051469",
+        'webhook': "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e861e0b4-b8e2-42ed-a21a-1edf90c41618",
+        'name': '小市值'
+    },
+    '三合一': {
+        'account': "170100005993",
+        'webhook': "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=2a336b4c-c38e-4ae3-9ff6-f14f175b4f73",
+        'name': '三合一'
+    },
+    'ETF轮动': {
+        'account': "190200026196",
+        'webhook': "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=599439e6-4132-48b6-a05a-c1fbb32e33d8",
+        'name': 'ETF轮动'
+    }
+}
+
+# 自动加载配置
+# 如果 ROLE 不在配置中，直接报错提示，而不是静默加载默认值，防止误操作
+if ROLE not in CONFIGS:
+    raise ValueError(f"无效的 ROLE: {ROLE}，可选值: {list(CONFIGS.keys())}")
+
+current_config = CONFIGS[ROLE]
+MY_ACCOUNT = current_config['account']
+MY_WEBHOOK = current_config['webhook']
+NAME = current_config['name']
 
 g = G()
 
@@ -206,6 +229,8 @@ def print_daily_profit(C):
 
     markdown = f"""
 股票持仓报告 ({_get_today_str(C)})
+---
+策略账号: {NAME}
 """
     for item in data_list:
         stock = item['stock']
@@ -255,22 +280,12 @@ def _get_today_str(C):
 
 
 def _get_yesterday_str(C):
-    if hasattr(C, "yesterday"):
-        v = _to_yyyymmdd(C.yesterday)
-        if v:
-            return v
-    try:
-        # 尝试通过 get_trading_dates 获取上一个交易日
-        end_date = _get_today_str(C)
-        if hasattr(C, "get_trading_dates"):
-            days = C.get_trading_dates(stockcode="SH", start_date="", end_date=end_date, count=2, period="1d")
-            if days and len(days) >= 2:
-                return days[-2]
-    except Exception:
-        pass
-    # 兜底逻辑：如果无法获取交易日历，回退到昨天（日历日）
-    # 注意：如果是周一，这里会返回周日，get_market_data_ex 通常能容忍
-    return (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y%m%d")
+    """获取上一个交易日字符串"""
+    if hasattr(C, "yesterday") and C.yesterday:
+        return _to_yyyymmdd(C.yesterday)
+    
+    # 统一使用 _get_previous_trading_day (基于交易日历)
+    return _get_previous_trading_day(C, datetime.datetime.now())
 
 
 def _chunk_list(items, chunk_size):
@@ -310,7 +325,7 @@ def _get_stock_pool_etf(_C):
 def _check_basic_info(C, name, stock_list):
     sample = stock_list[: min(50, max(10, int(g.sample_size / 10)))]
     if not sample:
-        return {"name": name, "sample": 0, "name_missing": 0, "open_date_err": 0, "instrument_err": 0}
+        return {"name": name, "status": "skip_empty", "desc": "股票池为空"}
 
     name_missing = 0
     open_date_err = 0
@@ -329,9 +344,21 @@ def _check_basic_info(C, name, stock_list):
             _ = C.get_instrumentdetail(code)
         except Exception:
             instrument_err += 1
-    stat = {"name": name, "sample": len(sample), "name_missing": name_missing, "open_date_err": open_date_err, "instrument_err": instrument_err}
-    if name_missing / len(sample) >= 0.8 or open_date_err / len(sample) >= 0.5 or instrument_err / len(sample) >= 0.5:
-        _notify("【前置检查】警告", f"{name} 基础库抽检异常: {stat}")
+            
+    is_bad = name_missing / len(sample) >= 0.8 or open_date_err / len(sample) >= 0.5 or instrument_err / len(sample) >= 0.5
+    
+    stat = {
+        "name": name, 
+        "sample": len(sample), 
+        "name_missing": name_missing, 
+        "open_date_err": open_date_err, 
+        "instrument_err": instrument_err,
+        "status": "fail" if is_bad else "ok",
+        "desc": "缺失严重" if is_bad else "正常"
+    }
+    
+    if is_bad:
+        print(f"【前置检查】警告 {name} 基础库抽检异常: {stat}")
     else:
         print(f"【前置检查】{_now_str()} {name} 基础库抽检: {stat}")
     return stat
@@ -410,10 +437,75 @@ def _check_trade_calendar(C):
         return False, 0
 
 
+def _get_shifted_date(C, date, days, days_type='T'):
+    """日期偏移函数"""
+    try:
+        if isinstance(date, str):
+            base_date = datetime.datetime.strptime(date, "%Y%m%d")
+        else:
+            base_date = date
+        
+        if days_type == 'N':
+            shifted_date = base_date + datetime.timedelta(days=days)
+            return shifted_date.strftime("%Y%m%d")
+        
+        elif days_type == 'T':
+            start_date = (base_date - datetime.timedelta(days=365)).strftime("%Y%m%d")
+            end_date = (base_date + datetime.timedelta(abs(days) + 365)).strftime("%Y%m%d")
+            trade_days = C.get_trading_dates(stockcode='SH', start_date=start_date, end_date=end_date, count=1000, period='1d')
+            
+            if not trade_days:
+                return (base_date + datetime.timedelta(days=days)).strftime("%Y%m%d")
+            
+            date_str = base_date.strftime("%Y%m%d")
+            if date_str in trade_days:
+                index = trade_days.index(date_str)
+            else:
+                # 如果当前日期不是交易日，找前一个交易日
+                found = False
+                for i in range(1, 30):
+                    prev_date = base_date - datetime.timedelta(days=i)
+                    prev_str = prev_date.strftime("%Y%m%d")
+                    if prev_str in trade_days:
+                        index = trade_days.index(prev_str)
+                        found = True
+                        break
+                if not found:
+                    return (base_date + datetime.timedelta(days=days)).strftime("%Y%m%d")
+            
+            new_index = index + days
+            new_index = max(0, min(new_index, len(trade_days) - 1))
+            return trade_days[new_index]
+        return date
+    except Exception as e:
+        print(f"【日期偏移】错误: {str(e)}")
+        return date
+
+def _get_previous_trading_day(C, current_date):
+    """获取前一个交易日"""
+    if isinstance(current_date, str):
+        current_date = datetime.datetime.strptime(current_date, "%Y%m%d")
+    current_str = current_date.strftime("%Y%m%d")
+    prev_str = _get_shifted_date(C, current_str, -1, 'T')
+    return prev_str
+
 def _check_daily_bars_available(C, stock_list, end_date, count):
     sample = stock_list[: g.sample_size]
     if not sample:
         return False, {"sample": 0, "missing": 0}
+
+    # 获取期望的交易日历序列
+    expected_dates = []
+    try:
+        # 确保 end_date 是交易日，或者获取截止到 end_date 的最近 count 个交易日
+        # 注意: get_trading_dates(end_date=end_date) 会包含 end_date (如果是交易日)
+        # 我们需要 count 个交易日
+        trade_days = C.get_trading_dates(stockcode="SH", start_date="", end_date=end_date, count=count, period="1d")
+        expected_dates = trade_days if trade_days else []
+    except Exception as e:
+        print(f"【前置检查】获取交易日历异常: {e}")
+        # 如果获取不到日历，回退到原来的简单检查
+        expected_dates = []
 
     try:
         data = C.get_market_data_ex(
@@ -432,15 +524,67 @@ def _check_daily_bars_available(C, stock_list, end_date, count):
         return False, {"sample": len(sample), "missing": len(sample)}
 
     missing = 0
+    # 精确获取前一个交易日 (target_date_str)
+    # 如果 expected_dates 存在，最后一个就是 target_date_str
+    if expected_dates:
+        target_date_str = expected_dates[-1]
+    else:
+        try:
+            target_trade_day = _get_shifted_date(C, _to_yyyymmdd(end_date), 0, 'T')
+            target_date_str = target_trade_day
+        except Exception:
+            target_date_str = _to_yyyymmdd(end_date)
+
+    # 统计每个日期的缺失情况 (用于检测系统性缺失)
+    # missing_counts: { date_str: missing_count }
+    missing_counts = {d: 0 for d in expected_dates}
+
     for s in sample:
         if s not in data or data[s] is None:
             missing += 1
+            # 该股票完全缺失，所有日期都计入
+            for d in expected_dates:
+                missing_counts[d] += 1
             continue
         try:
-            if len(data[s]) < count:
+            df = data[s]
+            if len(df) < count:
                 missing += 1
+                continue
+            
+            # 1. 检查最新日期
+            last_dt = df.index[-1]
+            last_date_str = _to_yyyymmdd(last_dt)
+            
+            if last_date_str < target_date_str:
+                if missing < 3: 
+                    print(f"【数据校验】{s} 数据滞后: 实际最新={last_date_str}, 预期={target_date_str}")
+                missing += 1
+                continue
+            
+            # 2. 检查中间日期的连续性 (针对 expected_dates)
+            if expected_dates:
+                # 获取该股票的日期列表 (转字符串)
+                stock_dates = set([_to_yyyymmdd(d) for d in df.index])
+                for d in expected_dates:
+                    if d not in stock_dates:
+                        missing_counts[d] += 1
+
         except Exception:
             missing += 1
+            
+    # 分析系统性缺失
+    # 如果某个日期在超过 30% 的样本中都缺失，视为该日数据未下载
+    systematic_missing = False
+    for d, cnt in missing_counts.items():
+        missing_ratio = cnt / len(sample)
+        if missing_ratio > 0.3:
+            print(f"【严重警告】检测到日期 {d} 存在系统性缺失! 样本缺失率: {missing_ratio:.1%}")
+            systematic_missing = True
+            
+    if systematic_missing:
+        return False, {"sample": len(sample), "missing": "systematic", "detail": missing_counts}
+
     ok = (missing / len(sample)) <= g.max_missing_ratio
     return ok, {"sample": len(sample), "missing": missing}
 
@@ -483,16 +627,19 @@ def _notify(title, detail):
 def _prefetch_universe_daily(C, name, stock_list, end_date, prefetch_days, required_count):
     if not stock_list:
         _notify("【前置检查】警告", f"{name} 股票池为空，跳过")
-        return {"name": name, "status": "skip_empty"}
+        return {"name": name, "status": "skip_empty", "desc": "股票池为空"}
 
     bars_ok, bars_stat = _check_daily_bars_available(C, stock_list, end_date=end_date, count=required_count)
     print(f"【前置检查】{_now_str()} {name} 日线可用性(样本): ok={bars_ok}, stat={bars_stat}, need={required_count}")
 
     if bars_ok:
-        return {"name": name, "status": "ok", "bars": bars_stat, "need": required_count}
+        return {"name": name, "status": "ok", "bars": bars_stat, "need": required_count, "desc": "数据完整"}
 
     days = _get_trade_days(C, end_date=end_date, count=prefetch_days)
     start_time = days[0] if days else "20100101"
+    
+    _notify(f"【前置检查】{name} 触发补全", f"目标日期: {end_date}\n补全区间: {start_time} - {end_date}\n缺失样本: {bars_stat['missing']}/{bars_stat['sample']}")
+    
     ret = download_history_data_general(
         stock_list=stock_list,
         period="1d",
@@ -501,15 +648,15 @@ def _prefetch_universe_daily(C, name, stock_list, end_date, prefetch_days, requi
         chunk_size=g.chunk_size,
         prefer_single=False,
     )
-    _notify("【前置检查】日线下载触发", f"{name} start={start_time}, end={end_date}, result={ret}")
 
     bars_ok2, bars_stat2 = _check_daily_bars_available(C, stock_list, end_date=end_date, count=required_count)
     print(f"【前置检查】{_now_str()} {name} 日线复检(样本): ok={bars_ok2}, stat={bars_stat2}, need={required_count}")
+    
     if not bars_ok2:
-        _notify("【前置检查】警告", f"{name} 日线复检仍不通过: stat={bars_stat2}")
-        return {"name": name, "status": "fail", "bars": bars_stat2, "need": required_count, "download": ret}
+        _notify(f"【前置检查】{name} 补全失败", f"依然缺失: {bars_stat2['missing']}/{bars_stat2['sample']}\n下载结果: ok={ret['ok']}, fail={ret['fail']}")
+        return {"name": name, "status": "fail", "bars": bars_stat2, "need": required_count, "download": ret, "desc": "补全失败"}
 
-    return {"name": name, "status": "fixed", "bars": bars_stat2, "need": required_count, "download": ret}
+    return {"name": name, "status": "fixed", "bars": bars_stat2, "need": required_count, "download": ret, "desc": "补全成功"}
 
 
 def precheck_and_fix(C):
@@ -520,7 +667,7 @@ def precheck_and_fix(C):
 
     t0 = time.time()
     yesterday_str = _get_yesterday_str(C)
-    _notify("【前置检查】开始", f"today={today_str}, yesterday={yesterday_str}")
+    # _notify("【前置检查】开始", f"today={today_str}, yesterday={yesterday_str}")
 
     cal_ok, cal_len = _check_trade_calendar(C)
     print(f"【前置检查】{_now_str()} 交易日历: ok={cal_ok}, len={cal_len}")
@@ -532,15 +679,15 @@ def precheck_and_fix(C):
     print(f"【前置检查】{_now_str()} 股票池: 沪深A股={len(a_share_pool)}, 中小综指={len(smallcap_pool)}, ETF池={len(etf_pool)}")
 
     precheck_results = []
-    precheck_results.append(_check_basic_info(C, "三合一(沪深A股)", a_share_pool))
+    precheck_results.append(_check_basic_info(C, "三合一基础", a_share_pool))
     if smallcap_pool:
-        precheck_results.append(_check_basic_info(C, "小市值(中小综指)", smallcap_pool))
-    precheck_results.append(_check_basic_info(C, "ETF轮动(ETF池)", etf_pool))
+        precheck_results.append(_check_basic_info(C, "小市值基础", smallcap_pool))
+    precheck_results.append(_check_basic_info(C, "ETF轮动基础", etf_pool))
 
     precheck_results.append(
         _prefetch_universe_daily(
             C,
-            name="三合一(沪深A股)",
+            name="三合一",
             stock_list=a_share_pool,
             end_date=yesterday_str,
             prefetch_days=g.prefetch_days_a_share,
@@ -552,7 +699,7 @@ def precheck_and_fix(C):
         precheck_results.append(
             _prefetch_universe_daily(
                 C,
-                name="小市值(中小综指)",
+                name="小市值",
                 stock_list=smallcap_pool,
                 end_date=yesterday_str,
                 prefetch_days=g.prefetch_days_smallcap,
@@ -562,7 +709,7 @@ def precheck_and_fix(C):
         precheck_results.append(
             _prefetch_universe_daily(
                 C,
-                name="小市值(指数399101)",
+                name="小市值指数",
                 stock_list=[g.smallcap_index_code],
                 end_date=yesterday_str,
                 prefetch_days=10,
@@ -572,7 +719,7 @@ def precheck_and_fix(C):
     precheck_results.append(
         _prefetch_universe_daily(
             C,
-            name="ETF轮动(ETF池)",
+            name="ETF轮动",
             stock_list=etf_pool,
             end_date=yesterday_str,
             prefetch_days=g.prefetch_days_etf,
@@ -584,7 +731,7 @@ def precheck_and_fix(C):
     precheck_results.append(
         _prefetch_universe_daily(
             C,
-            name="逃顶风控(1000指数+IM)",
+            name="逃顶风控",
             stock_list=g.risk_control_pool,
             end_date=yesterday_str,
             prefetch_days=20,
@@ -601,10 +748,45 @@ def precheck_and_fix(C):
         _notify("【前置检查】警告", f"股本数据抽检偏少: stat={cap_stat}（需要在客户端界面下载财务数据或提供下载函数）")
 
     elapsed = time.time() - t0
-    results_lines = []
+    
+    # 生成 Markdown 报告
+    markdown = f"""
+数据前置检查报告 ({today_str})
+---
+策略账号: {NAME}
+目标日期: {yesterday_str}
+总耗时: {elapsed:.2f}s
+
+| 策略 | 状态 | 说明 |
+| :--- | :--- | :--- |
+"""
+    status_map = {
+        "ok": "✅ 正常",
+        "fixed": "🛠️ 已补全",
+        "fail": "❌ 失败",
+        "skip_empty": "⚠️ 跳过"
+    }
+    
     for item in precheck_results:
-        results_lines.append(f"\n{item}")
-    _notify("【前置检查】完成", f"耗时={elapsed:.2f}s\n" + "\n".join(results_lines))
+        name = item.get("name", "未知")
+        status = item.get("status", "fail")
+        desc = item.get("desc", "")
+        status_icon = status_map.get(status, status)
+        
+        # 简化名字，去掉括号内容
+        simple_name = name.split("(")[0]
+        
+        markdown += f"| {simple_name} | {status_icon} | {desc} |\n"
+
+    # 如果有补全操作，增加详细统计
+    fixed_items = [i for i in precheck_results if i.get("status") == "fixed"]
+    if fixed_items:
+        markdown += "\n**补全详情:**\n"
+        for item in fixed_items:
+            dl = item.get("download", {})
+            markdown += f"- {item['name']}: 成功 {dl.get('ok',0)}, 失败 {dl.get('fail',0)}\n"
+            
+    _notify("【前置检查】完成", markdown)
 
 
 def post_market_download(C):
@@ -663,14 +845,11 @@ def init(C):
     try:
         now_dt = datetime.datetime.now()
         C.today = pd.to_datetime(now_dt)
-        today_str = _to_yyyymmdd(now_dt)
-        days = _get_trade_days(C, end_date=today_str, count=2)
-        if days and len(days) >= 2:
-            C.yesterday = days[-2]
-        else:
-            C.yesterday = (now_dt - datetime.timedelta(days=1)).strftime("%Y%m%d")
+        # 统一使用 _get_previous_trading_day 计算昨日
+        C.yesterday = _get_previous_trading_day(C, now_dt)
     except Exception:
-        pass
+        # 兜底：昨天
+        C.yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y%m%d")
 
     C.run_time("print_daily_profit_func", "1nDay", "2025-03-01 15:00:00", "SH")
     C.run_time("post_market_download", "1nDay", "2025-03-01 16:00:00", "SH")
