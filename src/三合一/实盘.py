@@ -242,13 +242,13 @@ def filter_st_paused_stock(C, initial_list):
 
             # 获取停牌状态
             is_paused = False
-            try:
-                is_paused = C.is_suspended_stock(stock)
-                if is_paused:
-                    paused_count += 1
-            except Exception:
-                # 获取停牌状态失败，默认不停牌
-                pass
+            # try:
+            #     is_paused = C.is_suspended_stock(stock)
+            #     if is_paused:
+            #         paused_count += 1
+            # except Exception:
+            #     # 获取停牌状态失败，默认不停牌
+            #     pass
             
             if not is_st and not is_paused:
                 result.append(stock)
@@ -829,7 +829,7 @@ def init(C):
 
     else:
         # 实盘时间
-        C.run_time("get_stock_list_func", "1nDay", "2025-03-01 09:16:00", "SH")
+        C.run_time("get_stock_list_func", "1nDay", "2025-03-01 09:20:00", "SH")
         C.run_time("buy_func", "1nDay", "2025-03-01 09:25:41", "SH")
         C.run_time("sell_func", "1nDay", "2025-03-01 11:25:00", "SH")
         C.run_time("sell_func", "1nDay", "2025-03-01 14:50:00", "SH")
