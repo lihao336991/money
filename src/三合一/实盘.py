@@ -535,8 +535,28 @@ def get_stock_list_func(C):
     """
     选股逻辑：筛选"一进二"模式的股票
     """
+    # 动态确定基准日期 T
+    if C.do_back_test:
+        # 回测模式：保持原有逻辑，依赖框架维护的 C.yesterday (通常为 T-1)
+        date = C.yesterday
+    else:
+        # 实盘模式：根据当前时间判断
+        now = datetime.datetime.now()
+        today_str = now.strftime("%Y%m%d")
+        
+        # 判断当前时间是否在收盘后 (15:00 后)
+        if now.hour >= 15:
+            # 收盘后预演，以今天为 T 日
+            # 使用 days=0 获取最近的一个交易日（如果是周末则取周五）
+            date = get_shifted_date(C, today_str, 0, 'T')
+            print(f"【选股模式】盘后预演模式，基准日期(T)={date}")
+        else:
+            # 盘中或盘前，以昨天（前一交易日）为 T 日
+            # 使用 days=-1 获取前一个交易日
+            date = get_shifted_date(C, today_str, -1, 'T')
+            print(f"【选股模式】盘前选股模式，基准日期(T)={date}")
+
     # 获取前3个交易日日期
-    date = C.yesterday # T
     date_1 = get_shifted_date(C, date, -1, 'T') # T-1
     date_2 = get_shifted_date(C, date, -2, 'T') # T-2
     
@@ -848,6 +868,7 @@ def init(C):
         C.run_time("sell_func", "1nDay", "2025-03-01 11:23:00", "SH")
         C.run_time("sell_func", "1nDay", "2025-03-01 14:48:00", "SH")
         C.run_time("send_account_info_close_func", "1nDay", "2025-03-01 15:00:00", "SH")
+        C.run_time("get_stock_list_func", "1nDay", "2025-03-01 15:30:00", "SH") # 预演次日选股
 
         
     print("【初始化】策略初始化完成")

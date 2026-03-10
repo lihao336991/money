@@ -858,7 +858,7 @@ class TradingStrategy:
         # 1102 表示总资金量下单
         lastOrderId = str(uuid.uuid4())
         
-        passorder(23, 1102, context.account, security, 5, -1, value, lastOrderId, 1, lastOrderId, context)
+        passorder(23, 1102, context.account, security, 4, -1, value, lastOrderId, 1, lastOrderId, context)
 
     def close_position(self, context, stock: Any):
         """
