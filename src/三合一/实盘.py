@@ -325,13 +325,13 @@ def prepare_stock_list(C, date):
 # 策略核心逻辑
 # -------------------------------------------------------------------------------------------
 
-def rise_low_volume(C, s):
+def rise_low_volume(C, s, date):
     """
     判断股票上涨时是否未放量（左压情况）
     """
     try:
         data = C.get_market_data_ex(
-            ['high', 'volume'], [s], period="1d", start_time='', end_time=C.yesterday,
+            ['high', 'volume'], [s], period="1d", start_time='', end_time=date,
             count=106, dividend_type="follow", fill_data=False, subscribe=False
         )
         if s not in data or len(data[s]) < 106:
@@ -517,7 +517,7 @@ def get_priority_list(C, hl_list, date):
             continue
             
         # 检查是否有左压且成交量不足的情况
-        if rise_low_volume(C, s):
+        if rise_low_volume(C, s, date):
             print(f"【对比日志】过滤 {s}: 左压缩量")
             continue
             
