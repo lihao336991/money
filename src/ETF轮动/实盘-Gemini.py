@@ -23,6 +23,7 @@ g.m_days = 25
 g.min_money = 500  
 g.switch_threshold = 0.1 # 换仓阈值：新标的得分需超过当前持仓 10% 才换仓
 g.today_target_positions = {}
+g.today_target_list = []
 
 # 账户和Webhook配置
 # 模拟账号
@@ -379,6 +380,7 @@ def execute_sell_logic(C):
     
     # 1. 筛选目标ETF
     target_list = filter_etf(C)
+    g.today_target_list = target_list
     log.info(f"今日选中目标: {target_list}")
     messager.send_message(f"【ETF轮动-信号计算】今日选中目标: {target_list}, {[C.get_stock_name(code) for code in target_list]}")
     
@@ -458,14 +460,19 @@ def execute_buy_logic(C):
     第二阶段：执行买入
     """
     current_time = datetime.now().strftime("%H:%M:%S")
-    log.info(f"[{current_time}] 阶段2: 资金应已回笼，开始执行买入... {g.today_target_positions}")
+    log.info(f"[{current_time}] 阶段2: 资金应已回笼，开始执行买入... {g.today_target_list}")
     messager.send_message(f"【ETF轮动-交易】开始执行买入逻辑 @ {current_time}")
     
-    target_positions = g.today_target_positions
-    if not target_positions:
+    target_list = g.today_target_list
+    if not target_list:
         messager.send_message("今日无买入目标")
         return
 
+    # 如果可用余额不足1w，也return
+    if get_total_asset(C) < 10000:
+        messager.send_message("可用余额不足1w，不执行买入")
+        return
+    
     # 实盘中先撤单 (确保资金不会被占用)
     if not C.do_back_test:
         cancel_unfilled_orders(C)
@@ -477,7 +484,6 @@ def execute_buy_logic(C):
     # 重新计算目标市值（修复资金不足bug）
     # 使用策略专用资产计算
     strategy_asset = get_strategy_asset(C)
-    target_list = list(target_positions.keys())
     per_value = strategy_asset / len(target_list) if target_list else 0
     log.info(f"买入阶段重新计算: 策略总资产={strategy_asset:.3f}, 单标的={per_value:.3f}")
 
