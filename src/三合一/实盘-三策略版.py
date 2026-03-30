@@ -35,7 +35,11 @@ g = G()
 # 股票池缓存
 g.cached_stock_list = None
 g.cached_stock_list_date = None
-g.gap_up = [] # 选出的股票池
+g.gap_up = []
+g.gap_down = []
+g.reversal = []
+g.today_buys = []
+g.next_day_auction_take_profit = set()
 
 # 账户配置
 # MY_ACCOUNT = "19164901653"
@@ -589,6 +593,8 @@ def get_stock_list_func(C):
     hl0_list = [] # T日涨停
     hl1_list = [] # T-1曾涨停 (聚宽原代码 get_ever_hl_stock 是 "曾" 触及涨停)
     hl2_list = [] # T-2曾涨停
+    hl0_ever_list = []
+    hl_close_T_1_list = []
     
     for s in initial_list:
         if s not in data or len(data[s]) < 4:
@@ -606,11 +612,15 @@ def get_stock_list_func(C):
         limit_T = get_limit_of_stock(s, closes[-2])[0]
         if round(closes[-1], 2) == round(limit_T, 2):
             hl0_list.append(s)
+        if round(highs[-1], 2) == round(limit_T, 2) and round(closes[-1], 2) != round(limit_T, 2):
+            hl0_ever_list.append(s)
             
         # T-1日曾涨停 (最高价)
         limit_T_1 = get_limit_of_stock(s, closes[-3])[0]
         if round(highs[-2], 2) == round(limit_T_1, 2):
             hl1_list.append(s)
+        if round(closes[-2], 2) == round(limit_T_1, 2):
+            hl_close_T_1_list.append(s)
             
         # T-2日曾涨停 (最高价)
         limit_T_2 = get_limit_of_stock(s, closes[-4])[0]
@@ -629,6 +639,11 @@ def get_stock_list_func(C):
     
     print(f"【对比日志】一进二初选: {len(hl_list)}, 列表: {hl_list}")
     messager.send_message(f"一进二初选: {len(hl_list)}")
+
+    g.gap_down = [s for s in hl0_list if s not in hl1_list]
+    g.reversal = [s for s in hl0_ever_list if s not in set(hl_close_T_1_list)]
+    messager.send_message(f"首板低开候选: {len(g.gap_down)}")
+    messager.send_message(f"弱转强候选: {len(g.reversal)}")
 
     # 计算昨日涨停情绪因子
     yesterday_high_limit_factor = get_high_limit_factor(C, initial_list, date)
@@ -655,100 +670,284 @@ def get_stock_list_func(C):
     
 def buy_func(C):
     """
-    买入逻辑：执行符合条件的"一进二"股票买入
+    买入逻辑：三策略合并买入
     """
     messager.send_message("【买入执行】开始...")
-    qualified_stocks = []  # 符合条件的股票列表
-
     date_now = C.today.strftime("%Y%m%d")
-    
-    # 遍历"一进二"股票池
+
+    gk_stocks = []
+    dk_stocks = []
+    rzq_stocks = []
+    candidates = []
+
+    def _get_prev_day_bar(stock):
+        d = C.get_market_data_ex(['open', 'close', 'volume', 'amount'], [stock], period="1d", start_time='', end_time=C.yesterday,
+                                 count=1, dividend_type="follow", fill_data=False, subscribe=False)
+        if stock not in d or d[stock].empty:
+            return None
+        df = d[stock]
+        close = float(df['close'].iloc[0])
+        open_ = float(df['open'].iloc[0]) if 'open' in df.columns else close
+        vol = float(df['volume'].iloc[0]) * 100
+        amt = float(df['amount'].iloc[0]) if 'amount' in df.columns else 0.0
+        return {'open': open_, 'close': close, 'volume': vol, 'amount': amt}
+
+    def _get_today_auction_bar(stock):
+        d = C.get_market_data_ex(['open', 'volume', 'amount'], [stock], period="1d", start_time=date_now, end_time=date_now,
+                                 count=1, dividend_type="follow", fill_data=False, subscribe=True)
+        if stock not in d or d[stock].empty:
+            return None
+        df = d[stock]
+        open_ = float(df['open'].iloc[0])
+        vol = float(df['volume'].iloc[0]) * 100
+        amt = float(df['amount'].iloc[0]) if 'amount' in df.columns else 0.0
+        return {'open': open_, 'volume': vol, 'amount': amt}
+
     for s in g.gap_up:
-        # 获取前一日数据
-        prev_day_data = C.get_market_data_ex(
-            ['close', 'volume'], [s], period="1d", start_time='', end_time=C.yesterday,
-            count=1, dividend_type="follow", fill_data=False, subscribe=False
-        )
-        if s not in prev_day_data or prev_day_data[s].empty:
-            print(f"【debug】{s} 无前一日数据")
+        prev = _get_prev_day_bar(s)
+        if not prev:
             continue
-        prev_vol = prev_day_data[s]['volume'].iloc[0]
-        prev_close = prev_day_data[s]['close'].iloc[0]
-        
-        # 获取集合竞价数据 (09:15-09:25)
-        # QMT get_market_data_ex period='1m' start=092500 end=092500 doesn't give auction summary well.
-        # But we can try getting the first bar of the day or tick.
-        # 策略运行时间 09:25:41. 此时已有集合竞价结束的数据。
-        # 取当日第1分钟数据，或者 tick.
-        
-        auction_data = C.get_market_data_ex(
-            ['open', 'volume', 'amount'], [s], period="1d", start_time=date_now, end_time=date_now,
-            count=1, dividend_type="follow", fill_data=False, subscribe=True
-        )
-        # 注意: 9:25:41时，1d数据的 open, volume 是集合竞价的.
-        
-        print(f"【debug】{s} {auction_data}")
-        if s not in auction_data or auction_data[s].empty:
-            print(f"【debug】{s} 无集合竞价数据")
-            continue
-            
-        auc_vol = auction_data[s]['volume'].iloc[0]
-        auc_current = auction_data[s]['open'].iloc[0] # current price is open
-
-        print(f"【debug】{s}, 前一日成交量={prev_vol}, 集合竞价成交量={auc_vol}, 集合竞价开盘价={auc_current}，竞价量比={auc_vol/prev_vol:.2%}")
-        
-        # 筛选集合竞价成交量大于前一日成交量4%的股票
-        if prev_vol == 0 or auc_vol / prev_vol < 0.04:
-            print(f"【买入过滤】{s} 竞价量比不足: {auc_vol/prev_vol:.2%}")
+        auc = _get_today_auction_bar(s)
+        if not auc:
             continue
 
-        # 计算当前价格相对于涨停板价格的比率
-        # 原策略: current_ratio = auction_data['current'][0] / (current_data[s].high_limit / 1.1)
-        # high_limit / 1.1 大概是 昨日收盘价.
-        # 所以 ratio = current / last_close.
-        
-        current_ratio = auc_current / prev_close
-        
-        # 筛选开盘涨幅在0-6%之间的股票
-        # 原策略: if current_ratio <= 1 or current_ratio >= 1.06: continue
+        if prev['volume'] <= 0 or auc['volume'] / prev['volume'] < 0.03:
+            continue
+        current_ratio = auc['open'] / prev['close'] if prev['close'] else 0
         if current_ratio <= 1 or current_ratio >= 1.06:
-            print(f"【买入过滤】{s} 开盘涨幅不符: {current_ratio:.2%}")
             continue
-            
-        # 将符合条件的股票和其实时数据一起存储
-        qualified_stocks.append({
-            'code': s,
-            'auction_price': auc_current,
-            'auction_volume': auc_vol,
-            'prev_close': prev_close,
-            'prev_volume': prev_vol
-        })
 
-    # 执行买入操作
+        gk_stocks.append(s)
+        candidates.append({'code': s, 'auction_price': auc['open'], 'tag': 'gk'})
+
+    if g.gap_down:
+        stock_list = list(g.gap_down)
+        rp_data = C.get_market_data_ex(['high', 'low', 'close'], stock_list, period="1d", start_time='', end_time=C.yesterday,
+                                       count=60, dividend_type="follow", fill_data=False, subscribe=False)
+        rp_ok = []
+        for s in stock_list:
+            if s not in rp_data or rp_data[s].empty:
+                continue
+            df = rp_data[s]
+            high_ = float(df['high'].max())
+            low_ = float(df['low'].min())
+            close_ = float(df['close'].iloc[-1])
+            if high_ <= low_:
+                continue
+            rp = (close_ - low_) / (high_ - low_)
+            if rp <= 0.5:
+                rp_ok.append(s)
+
+        for s in rp_ok:
+            prev = _get_prev_day_bar(s)
+            if not prev:
+                continue
+            if prev['amount'] < 1e8:
+                continue
+            auc = _get_today_auction_bar(s)
+            if not auc:
+                continue
+            open_pct = auc['open'] / prev['close'] if prev['close'] else 0
+            if open_pct < 0.955 or open_pct > 0.97:
+                continue
+            dk_stocks.append(s)
+            candidates.append({'code': s, 'auction_price': auc['open'], 'tag': 'dk'})
+
+    reversal_list = list(g.reversal) if g.reversal else []
+    financial_data = {}
+    if reversal_list:
+        try:
+            financial_data = C.get_raw_financial_data(['股本表.总股本', '股本表.流通股本'], reversal_list,
+                                                      get_shifted_date(C, C.yesterday, -365, 'T'), C.yesterday)
+        except Exception as e:
+            print(f"【对比日志】获取财务数据异常: {e}")
+            financial_data = {}
+
+    for s in reversal_list:
+        price_hist = C.get_market_data_ex(['close'], [s], period="1d", start_time='', end_time=C.yesterday,
+                                          count=4, dividend_type="follow", fill_data=False, subscribe=False)
+        if s not in price_hist or price_hist[s].empty or len(price_hist[s]) < 4:
+            continue
+        closes = price_hist[s]['close'].values
+        if closes[0] == 0:
+            continue
+        increase_ratio = (closes[-1] - closes[0]) / closes[0]
+        if increase_ratio > 0.28:
+            continue
+
+        prev = _get_prev_day_bar(s)
+        if not prev:
+            continue
+        if prev['open'] == 0:
+            continue
+        open_close_ratio = (prev['close'] - prev['open']) / prev['open']
+        if open_close_ratio < -0.05:
+            continue
+
+        if prev['volume'] == 0 or prev['close'] == 0:
+            continue
+        avg_price_increase_value = prev['amount'] / prev['volume'] / prev['close'] - 1
+        if avg_price_increase_value < -0.04 or prev['amount'] < 3e8 or prev['amount'] > 19e8:
+            continue
+
+        stock_num = 0
+        circulating_stock_num = 0
+        if s in financial_data:
+            try:
+                if '股本表.总股本' in financial_data[s]:
+                    vals = list(financial_data[s]['股本表.总股本'].values())
+                    if vals:
+                        stock_num = vals[-1]
+                if '股本表.流通股本' in financial_data[s]:
+                    vals = list(financial_data[s]['股本表.流通股本'].values())
+                    if vals:
+                        circulating_stock_num = vals[-1]
+            except Exception:
+                pass
+
+        if stock_num == 0:
+            continue
+        market_cap_val = prev['close'] * stock_num / 1e8
+        circulating_market_cap_val = prev['close'] * circulating_stock_num / 1e8
+        if market_cap_val < 70 or circulating_market_cap_val > 520:
+            continue
+
+        if rise_low_volume(C, s, C.yesterday):
+            continue
+
+        auc = _get_today_auction_bar(s)
+        if not auc:
+            continue
+        if prev['volume'] <= 0 or auc['volume'] / prev['volume'] < 0.03:
+            continue
+        current_ratio = auc['open'] / prev['close'] if prev['close'] else 0
+        if current_ratio <= 0.98 or current_ratio >= 1.09:
+            continue
+
+        rzq_stocks.append(s)
+        candidates.append({'code': s, 'auction_price': auc['open'], 'tag': 'rzq'})
+
+    seen = set()
+    final_candidates = []
+    for item in candidates:
+        code = item['code']
+        if code in seen:
+            continue
+        seen.add(code)
+        final_candidates.append(item)
+
+    if final_candidates:
+        messager.send_message('今日选股：' + ','.join([c['code'] for c in final_candidates]))
+        print('一进二：' + ','.join(gk_stocks))
+        print('首板低开：' + ','.join(dk_stocks))
+        print('弱转强：' + ','.join(rzq_stocks))
+    else:
+        messager.send_message('今日无目标个股')
+
     total_asset = get_account_total_asset(C)
-    available_cash = get_account_money(C) - 500 # 预留500元作为buffer
+    available_cash = get_account_money(C) - 500
 
-    messager.send_message(f"【今日买入】{len(qualified_stocks)} 只股票，分别是 {[C.get_stock_name(s['code']) for s in qualified_stocks]}，总金额={available_cash:.2f}")
-    
-    if len(qualified_stocks) != 0 and available_cash / total_asset > 0.3:
-        # 计算每只股票分配的资金
-        value = available_cash / len(qualified_stocks)
-        
-        # 使用每只股票自己的集合竞价价格进行购买
-        for stock_data in qualified_stocks:
+    messager.send_message(f"【今日买入】{len(final_candidates)} 只股票，分别是 {[C.get_stock_name(s['code']) for s in final_candidates]}，总金额={available_cash:.2f}")
+
+    if len(final_candidates) != 0 and available_cash / total_asset > 0.3:
+        value = available_cash / len(final_candidates)
+        for stock_data in final_candidates:
             s = stock_data['code']
             current_price = stock_data['auction_price']
-            
-            # 确保有足够资金买入至少100股
+            if current_price <= 0:
+                continue
             if value / current_price > 100:
                 if C.do_back_test:
-                     order_target_value(s, value, C, C.account)
+                    order_target_value(s, value, C, C.account)
                 else:
-                     open_position(C, s, value, current_price)
-                
+                    open_position(C, s, value, current_price)
+                g.today_buys.append(s)
                 print('买入' + s)
-                messager.send_message(f"买入 {s} {C.get_stock_name(s)}, 集合竞价价格={stock_data['auction_price']:.2f}, 挂单价格={current_price:.2f}, 金额={value:.2f}")
+                messager.send_message(f"买入 {s} {C.get_stock_name(s)}, 价格={current_price:.2f}, 金额={value:.2f}, 来源={stock_data['tag']}")
                 print('———————————————————————————————————')
+
+def record_buy_day_take_profit_list_func(C):
+    if not getattr(g, 'today_buys', None):
+        g.today_buys = []
+    if not hasattr(g, 'next_day_auction_take_profit'):
+        g.next_day_auction_take_profit = set()
+
+    if not g.today_buys:
+        return
+
+    positions = get_trade_detail_data(C.account, 'STOCK', 'POSITION')
+    if not positions:
+        g.today_buys = []
+        return
+
+    pos_map = {codeOfPosition(p): p for p in positions}
+    for s in list(set(g.today_buys)):
+        if s not in pos_map:
+            continue
+        position = pos_map[s]
+
+        tick = C.get_market_data_ex(['close'], [s], period="1m", count=1, dividend_type="follow", fill_data=False, subscribe=True)
+        if s not in tick or tick[s].empty:
+            continue
+        last_price = float(tick[s]['close'].iloc[0])
+
+        day_data = C.get_market_data_ex(['close'], [s], period="1d", count=2, end_time=C.yesterday, dividend_type="follow", fill_data=False, subscribe=False)
+        if s not in day_data or day_data[s].empty:
+            continue
+        last_close = float(day_data[s]['close'].iloc[-1])
+        high_limit = get_limit_of_stock(s, last_close)[0]
+
+        cost = getattr(position, 'm_dOpenPrice', 0)
+        if cost and last_price > cost and round(last_price, 2) < round(high_limit, 2):
+            g.next_day_auction_take_profit.add(s)
+
+    if g.next_day_auction_take_profit:
+        messager.send_message('次日竞价止盈名单：' + ','.join([C.get_stock_name(s) for s in list(g.next_day_auction_take_profit)]))
+
+    g.today_buys = []
+
+def auction_take_profit_func(C):
+    if not hasattr(g, 'next_day_auction_take_profit'):
+        g.next_day_auction_take_profit = set()
+    if not g.next_day_auction_take_profit:
+        return
+
+    positions = get_trade_detail_data(C.account, 'STOCK', 'POSITION')
+    pos_map = {codeOfPosition(p): p for p in positions} if positions else {}
+
+    date_now = C.today.strftime("%Y%m%d")
+
+    to_remove = []
+    for s in list(g.next_day_auction_take_profit):
+        if s not in pos_map:
+            to_remove.append(s)
+            continue
+        position = pos_map[s]
+        if position.m_nCanUseVolume <= 0:
+            continue
+
+        day_data = C.get_market_data_ex(['close'], [s], period="1d", count=2, end_time=C.yesterday, dividend_type="follow", fill_data=False, subscribe=False)
+        if s not in day_data or day_data[s].empty:
+            continue
+        last_close = float(day_data[s]['close'].iloc[-1])
+        high_limit = get_limit_of_stock(s, last_close)[0]
+
+        auction_bar = C.get_market_data_ex(['open'], [s], period="1d", start_time=date_now, end_time=date_now,
+                                           count=1, dividend_type="follow", fill_data=False, subscribe=True)
+        if s in auction_bar and not auction_bar[s].empty:
+            auction_price = float(auction_bar[s]['open'].iloc[0])
+            if round(auction_price, 2) >= round(high_limit, 2):
+                continue
+
+        close_position(C, s)
+        to_remove.append(s)
+        print('竞价止盈卖出' + s)
+        messager.send_message(f"竞价止盈卖出 {s} {C.get_stock_name(s)}")
+        print('———————————————————————————————————')
+
+    for s in to_remove:
+        if s in g.next_day_auction_take_profit:
+            g.next_day_auction_take_profit.remove(s)
 
 def sell_func(C):
     """
@@ -757,7 +956,10 @@ def sell_func(C):
     positions = get_trade_detail_data(C.account, 'STOCK', 'POSITION')
     if not positions:
         return
-        
+
+    now = C.today.to_pydatetime() if C.do_back_test else datetime.datetime.now()
+    is_morning = now.hour < 12
+
     print("【卖出执行】检查持仓...")
     for position in positions:
         s = codeOfPosition(position)
@@ -778,12 +980,33 @@ def sell_func(C):
         
         high_limit = get_limit_of_stock(s, last_close)[0]
         
-        # 条件：有可卖数量、未涨停
-        # 原策略: if last_price < high_limit: sell
-        if round(last_price, 2) < round(high_limit, 2):
+        if round(last_price, 2) >= round(high_limit, 2):
+            continue
+
+        cost = getattr(position, 'm_dOpenPrice', 0)
+        is_take_profit = cost > 0 and last_price > cost
+
+        if is_morning:
+            if is_take_profit:
+                close_position(C, s)
+                print('止盈卖出', [s, C.get_stock_name(s)])
+                messager.send_message(f"止盈卖出 {s} {C.get_stock_name(s)}")
+                print('———————————————————————————————————')
+            continue
+
+        close_data2 = C.get_market_data_ex(['close'], [s], period="1d", start_time='', end_time=C.yesterday,
+                                           count=4, dividend_type="follow", fill_data=False, subscribe=False)
+        ma5 = None
+        if s in close_data2 and not close_data2[s].empty and len(close_data2[s]) >= 4:
+            m4 = float(close_data2[s]['close'].mean())
+            ma5 = (m4 * 4 + last_price) / 5
+
+        is_ma5_stop = ma5 is not None and last_price < ma5
+        if is_take_profit or is_ma5_stop:
             close_position(C, s)
-            print('止损止盈卖出', [s, C.get_stock_name(s)])
-            messager.send_message(f"止损止盈卖出 {s} {C.get_stock_name(s)}")
+            reason = '止盈卖出' if is_take_profit else '止损卖出'
+            print(reason, [s, C.get_stock_name(s)])
+            messager.send_message(f"{reason} {s} {C.get_stock_name(s)}")
             print('———————————————————————————————————')
 
 
@@ -856,17 +1079,21 @@ def init(C):
     
     if C.do_back_test:
         C.runner.run_daily("09:16", get_stock_list_func)
+        C.runner.run_daily("09:25", auction_take_profit_func)
         C.runner.run_daily("09:26", buy_func) # 09:25:41 round to 09:26 for backtest bars
         C.runner.run_daily("11:25", sell_func)
         C.runner.run_daily("14:50", sell_func)
+        C.runner.run_daily("14:55", record_buy_day_take_profit_list_func)
         C.runner.run_daily("15:00", send_account_info_close_func)
 
     else:
         # 实盘时间
         C.run_time("get_stock_list_func", "1nDay", "2025-03-01 09:20:10", "SH")
+        C.run_time("auction_take_profit_func", "1nDay", "2025-03-01 09:24:55", "SH")
         C.run_time("buy_func", "1nDay", "2025-03-01 09:25:41", "SH")
         C.run_time("sell_func", "1nDay", "2025-03-01 11:23:00", "SH")
         C.run_time("sell_func", "1nDay", "2025-03-01 14:48:00", "SH")
+        C.run_time("record_buy_day_take_profit_list_func", "1nDay", "2025-03-01 14:55:00", "SH")
         C.run_time("send_account_info_close_func", "1nDay", "2025-03-01 15:00:00", "SH")
         C.run_time("get_stock_list_func", "1nDay", "2025-03-01 15:30:00", "SH") # 预演次日选股
 
