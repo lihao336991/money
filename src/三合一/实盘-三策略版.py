@@ -125,6 +125,30 @@ def get_previous_trading_day(C, current_date):
     prev_str = get_shifted_date(C, current_str, -1, 'T')
     return datetime.datetime.strptime(prev_str, "%Y%m%d").date()
 
+def ensure_context_dates(C):
+    today = getattr(C, 'today', None)
+    if today is None:
+        bar_time = None
+        try:
+            if hasattr(C, 'barpos') and hasattr(C, 'get_bar_timetag'):
+                bar_time = C.get_bar_timetag(C.barpos) + 8 * 3600 * 1000
+        except Exception:
+            bar_time = None
+
+        if bar_time is None:
+            bar_time = time.time() * 1000 + 8 * 3600 * 1000
+
+        C.currentTime = bar_time
+        C.today = pd.to_datetime(bar_time, unit='ms')
+    elif not isinstance(today, pd.Timestamp):
+        C.today = pd.to_datetime(today)
+
+    yesterday = getattr(C, 'yesterday', None)
+    if yesterday is None:
+        C.yesterday = get_previous_trading_day(C, C.today.date()).strftime("%Y%m%d")
+
+    return C.today, C.yesterday
+
 def codeOfPosition(position):
     """从持仓对象获取股票代码"""
     return position.m_strInstrumentID + '.' + position.m_strExchangeID
@@ -535,14 +559,148 @@ def get_priority_list(C, hl_list, date):
     
     return qualified_stocks
 
+def get_gap_down_priority_list(C, stock_list, date):
+    qualified_stocks = []
+    if not stock_list:
+        return qualified_stocks
+
+    print(f"【首板低开】开始预筛选，候选池 {len(stock_list)} 只")
+    data = C.get_market_data_ex(
+        ['high', 'low', 'close', 'amount'], stock_list, period="1d", start_time='', end_time=date,
+        count=60, dividend_type="follow", fill_data=False, subscribe=False
+    )
+
+    for s in stock_list:
+        if s not in data or data[s].empty:
+            print(f"【首板低开】过滤 {s}: 无历史数据")
+            continue
+
+        df = data[s]
+        high_ = float(df['high'].max())
+        low_ = float(df['low'].min())
+        close_ = float(df['close'].iloc[-1])
+        amount = float(df['amount'].iloc[-1]) if 'amount' in df.columns else 0.0
+
+        if high_ <= low_:
+            print(f"【首板低开】过滤 {s}: 区间高低点异常")
+            continue
+
+        rp = (close_ - low_) / (high_ - low_)
+        if rp > 0.5:
+            print(f"【首板低开】过滤 {s}: 相对位置过高 rp={rp:.4f}")
+            continue
+
+        if amount < 1e8:
+            print(f"【首板低开】过滤 {s}: 昨日成交额不足 {amount / 1e8:.2f}亿")
+            continue
+
+        qualified_stocks.append(s)
+
+    print(f"【首板低开】预筛选完成，剩余 {len(qualified_stocks)} 只")
+    return qualified_stocks
+
+def get_reversal_priority_list(C, stock_list, date):
+    qualified_stocks = []
+    if not stock_list:
+        return qualified_stocks
+
+    print(f"【弱转强】开始预筛选，候选池 {len(stock_list)} 只")
+    price_data = C.get_market_data_ex(
+        ['open', 'close', 'volume', 'amount'], stock_list, period="1d", start_time='', end_time=date,
+        count=4, dividend_type="follow", fill_data=False, subscribe=False
+    )
+
+    try:
+        financial_data = C.get_raw_financial_data(
+            ['股本表.总股本', '股本表.流通股本'], stock_list,
+            get_shifted_date(C, date, -365, 'T'), date
+        )
+    except Exception as e:
+        print(f"【弱转强】获取财务数据异常: {e}")
+        financial_data = {}
+
+    for s in stock_list:
+        if s not in price_data or price_data[s].empty or len(price_data[s]) < 4:
+            print(f"【弱转强】过滤 {s}: 历史K线不足")
+            continue
+
+        df = price_data[s]
+        closes = df['close'].values
+        if closes[0] == 0:
+            print(f"【弱转强】过滤 {s}: 基准收盘价为0")
+            continue
+
+        increase_ratio = (closes[-1] - closes[0]) / closes[0]
+        if increase_ratio > 0.28:
+            print(f"【弱转强】过滤 {s}: 近4日涨幅过高 {increase_ratio:.4f}")
+            continue
+
+        prev = df.iloc[-1]
+        prev_open = float(prev['open']) if 'open' in df.columns else 0.0
+        prev_close = float(prev['close'])
+        prev_volume = float(prev['volume']) * 100
+        prev_amount = float(prev['amount']) if 'amount' in df.columns else 0.0
+
+        if prev_open == 0:
+            print(f"【弱转强】过滤 {s}: 昨日开盘价为0")
+            continue
+
+        open_close_ratio = (prev_close - prev_open) / prev_open
+        if open_close_ratio < -0.05:
+            print(f"【弱转强】过滤 {s}: 昨日收盘弱于开盘过多 {open_close_ratio:.4f}")
+            continue
+
+        if prev_volume == 0 or prev_close == 0:
+            print(f"【弱转强】过滤 {s}: 昨日量价异常")
+            continue
+
+        avg_price_increase_value = prev_amount / prev_volume / prev_close - 1
+        if avg_price_increase_value < -0.04 or prev_amount < 3e8 or prev_amount > 19e8:
+            print(f"【弱转强】过滤 {s}: 均价涨幅/成交额不符 (涨幅={avg_price_increase_value:.4f}, 成交额={prev_amount / 1e8:.2f}亿)")
+            continue
+
+        stock_num = 0
+        circulating_stock_num = 0
+        if s in financial_data:
+            try:
+                if '股本表.总股本' in financial_data[s]:
+                    vals = list(financial_data[s]['股本表.总股本'].values())
+                    if vals:
+                        stock_num = vals[-1]
+                if '股本表.流通股本' in financial_data[s]:
+                    vals = list(financial_data[s]['股本表.流通股本'].values())
+                    if vals:
+                        circulating_stock_num = vals[-1]
+            except Exception:
+                pass
+
+        if stock_num == 0:
+            print(f"【弱转强】过滤 {s}: 无总股本数据")
+            continue
+
+        market_cap_val = prev_close * stock_num / 1e8
+        circulating_market_cap_val = prev_close * circulating_stock_num / 1e8
+        if market_cap_val < 70 or circulating_market_cap_val > 520:
+            print(f"【弱转强】过滤 {s}: 市值不符 (总市值={market_cap_val:.2f}, 流通={circulating_market_cap_val:.2f})")
+            continue
+
+        if rise_low_volume(C, s, date):
+            print(f"【弱转强】过滤 {s}: 左压缩量")
+            continue
+
+        qualified_stocks.append(s)
+
+    print(f"【弱转强】预筛选完成，剩余 {len(qualified_stocks)} 只")
+    return qualified_stocks
+
 def get_stock_list_func(C): 
     """
     选股逻辑：筛选"一进二"模式的股票
     """
+    _, fallback_yesterday = ensure_context_dates(C)
     # 动态确定基准日期 T
     if C.do_back_test:
-        # 回测模式：保持原有逻辑，依赖框架维护的 C.yesterday (通常为 T-1)
-        date = C.yesterday
+        date = getattr(C, 'yesterday', fallback_yesterday)
     else:
         # 实盘模式：根据当前时间判断
         now = datetime.datetime.now()
@@ -584,11 +742,11 @@ def get_stock_list_func(C):
     )
 
     # 打印前10个数据
-    for s in initial_list[:10]:
-        if s in data and not data[s].empty:
-            print(f"{s} 数据: {data[s].tail()}")
-        else:
-            print(f"{s} 无数据")
+    # for s in initial_list[:10]:
+    #     if s in data and not data[s].empty:
+    #         print(f"{s} 数据: {data[s].tail()}")
+    #     else:
+    #         print(f"{s} 无数据")
     
     hl0_list = [] # T日涨停
     hl1_list = [] # T-1曾涨停 (聚宽原代码 get_ever_hl_stock 是 "曾" 触及涨停)
@@ -640,10 +798,10 @@ def get_stock_list_func(C):
     print(f"【对比日志】一进二初选: {len(hl_list)}, 列表: {hl_list}")
     messager.send_message(f"一进二初选: {len(hl_list)}")
 
-    g.gap_down = [s for s in hl0_list if s not in hl1_list]
-    g.reversal = [s for s in hl0_ever_list if s not in set(hl_close_T_1_list)]
-    messager.send_message(f"首板低开候选: {len(g.gap_down)}")
-    messager.send_message(f"弱转强候选: {len(g.reversal)}")
+    gap_down_candidates = [s for s in hl0_list if s not in hl1_list]
+    reversal_candidates = [s for s in hl0_ever_list if s not in set(hl_close_T_1_list)]
+    messager.send_message(f"首板低开初选: {len(gap_down_candidates)}")
+    messager.send_message(f"弱转强初选: {len(reversal_candidates)}")
 
     # 计算昨日涨停情绪因子
     yesterday_high_limit_factor = get_high_limit_factor(C, initial_list, date)
@@ -666,7 +824,11 @@ def get_stock_list_func(C):
     #     print(f"【选股】最终入选 {len(g.gap_up)} 只")
     #     return
     g.gap_up = get_priority_list(C, hl_list, date)
-    messager.send_message(f"【选股】最终入选 {len(g.gap_up)} 只")
+    g.gap_down = get_gap_down_priority_list(C, gap_down_candidates, date)
+    g.reversal = get_reversal_priority_list(C, reversal_candidates, date)
+    messager.send_message(f"【一进二】最终入选 {len(g.gap_up)} 只")
+    messager.send_message(f"【首板低开】最终入选 {len(g.gap_down)} 只")
+    messager.send_message(f"【弱转强】最终入选 {len(g.reversal)} 只")
     
 def buy_func(C):
     """
@@ -721,28 +883,9 @@ def buy_func(C):
         candidates.append({'code': s, 'auction_price': auc['open'], 'tag': 'gk'})
 
     if g.gap_down:
-        stock_list = list(g.gap_down)
-        rp_data = C.get_market_data_ex(['high', 'low', 'close'], stock_list, period="1d", start_time='', end_time=C.yesterday,
-                                       count=60, dividend_type="follow", fill_data=False, subscribe=False)
-        rp_ok = []
-        for s in stock_list:
-            if s not in rp_data or rp_data[s].empty:
-                continue
-            df = rp_data[s]
-            high_ = float(df['high'].max())
-            low_ = float(df['low'].min())
-            close_ = float(df['close'].iloc[-1])
-            if high_ <= low_:
-                continue
-            rp = (close_ - low_) / (high_ - low_)
-            if rp <= 0.5:
-                rp_ok.append(s)
-
-        for s in rp_ok:
+        for s in g.gap_down:
             prev = _get_prev_day_bar(s)
             if not prev:
-                continue
-            if prev['amount'] < 1e8:
                 continue
             auc = _get_today_auction_bar(s)
             if not auc:
@@ -753,68 +896,10 @@ def buy_func(C):
             dk_stocks.append(s)
             candidates.append({'code': s, 'auction_price': auc['open'], 'tag': 'dk'})
 
-    reversal_list = list(g.reversal) if g.reversal else []
-    financial_data = {}
-    if reversal_list:
-        try:
-            financial_data = C.get_raw_financial_data(['股本表.总股本', '股本表.流通股本'], reversal_list,
-                                                      get_shifted_date(C, C.yesterday, -365, 'T'), C.yesterday)
-        except Exception as e:
-            print(f"【对比日志】获取财务数据异常: {e}")
-            financial_data = {}
-
-    for s in reversal_list:
-        price_hist = C.get_market_data_ex(['close'], [s], period="1d", start_time='', end_time=C.yesterday,
-                                          count=4, dividend_type="follow", fill_data=False, subscribe=False)
-        if s not in price_hist or price_hist[s].empty or len(price_hist[s]) < 4:
-            continue
-        closes = price_hist[s]['close'].values
-        if closes[0] == 0:
-            continue
-        increase_ratio = (closes[-1] - closes[0]) / closes[0]
-        if increase_ratio > 0.28:
-            continue
-
+    for s in g.reversal:
         prev = _get_prev_day_bar(s)
         if not prev:
             continue
-        if prev['open'] == 0:
-            continue
-        open_close_ratio = (prev['close'] - prev['open']) / prev['open']
-        if open_close_ratio < -0.05:
-            continue
-
-        if prev['volume'] == 0 or prev['close'] == 0:
-            continue
-        avg_price_increase_value = prev['amount'] / prev['volume'] / prev['close'] - 1
-        if avg_price_increase_value < -0.04 or prev['amount'] < 3e8 or prev['amount'] > 19e8:
-            continue
-
-        stock_num = 0
-        circulating_stock_num = 0
-        if s in financial_data:
-            try:
-                if '股本表.总股本' in financial_data[s]:
-                    vals = list(financial_data[s]['股本表.总股本'].values())
-                    if vals:
-                        stock_num = vals[-1]
-                if '股本表.流通股本' in financial_data[s]:
-                    vals = list(financial_data[s]['股本表.流通股本'].values())
-                    if vals:
-                        circulating_stock_num = vals[-1]
-            except Exception:
-                pass
-
-        if stock_num == 0:
-            continue
-        market_cap_val = prev['close'] * stock_num / 1e8
-        circulating_market_cap_val = prev['close'] * circulating_stock_num / 1e8
-        if market_cap_val < 70 or circulating_market_cap_val > 520:
-            continue
-
-        if rise_low_volume(C, s, C.yesterday):
-            continue
-
         auc = _get_today_auction_bar(s)
         if not auc:
             continue
@@ -1065,12 +1150,7 @@ def init(C):
     C.runner = TaskRunner(C)
     messager.set_is_test(C.do_back_test)
     C.currentTime = 0
-    
-    if not C.do_back_test:
-        currentTime = time.time() * 1000 + 8 * 3600 * 1000
-        C.currentTime = currentTime
-        C.today = pd.to_datetime(currentTime, unit='ms')
-        C.yesterday = get_previous_trading_day(C, C.today.date()).strftime("%Y%m%d")
+    ensure_context_dates(C)
 
     # 周末检查
     if not C.do_back_test and not is_trading(C.context):
@@ -1101,7 +1181,8 @@ def init(C):
     print("【初始化】策略初始化完成")
 
     # debug 实盘直接运行
-    get_stock_list_func(C)
+    if not C.do_back_test:
+        get_stock_list_func(C)
     # buy_func(C)
 
 def handlebar(C):
