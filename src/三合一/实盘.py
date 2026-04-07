@@ -726,7 +726,7 @@ def buy_func(C):
 
     # 执行买入操作
     total_asset = get_account_total_asset(C)
-    available_cash = get_account_money(C) - 500 # 预留500元作为buffer
+    available_cash = get_account_money(C) - 2000 # 预留500元作为buffer
 
     messager.send_message(f"【今日买入】{len(qualified_stocks)} 只股票，分别是 {[C.get_stock_name(s['code']) for s in qualified_stocks]}，总金额={available_cash:.2f}")
     
