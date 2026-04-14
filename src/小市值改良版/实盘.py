@@ -7,7 +7,7 @@
 import json
 import time as nativeTime
 import uuid
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Dict, List
 
 import pandas as pd
@@ -1257,8 +1257,11 @@ def init(context: Any):
         context.run_time("sell_stocks_func","1nDay","2025-03-01 09:30:00","SH")
         # 14:30 pm 检查涨停破板，需要卖出的持仓
         context.run_time("trade_afternoon_func","1nDay","2025-03-01 14:28:00","SH")
+        
+        # TODO 最近自己有操作，现在不自动平仓，防止误卖出
         # 14:50 pm 检查当日是否到达空仓日，需要一键清仓
-        context.run_time("close_account_func","1nDay","2025-03-01 14:48:00","SH")
+        # context.run_time("close_account_func","1nDay","2025-03-01 14:48:00","SH")
+        
         context.run_time("send_account_info_close_func","1nDay","2025-03-01 15:00:00","SH")
 
         # 15:10 pm 每日收盘后打印一次候选股票池

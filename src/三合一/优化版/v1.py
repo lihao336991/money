@@ -1,260 +1,369 @@
-# 克隆自聚宽文章：https://www.joinquant.com/post/53831
-# 标题：惊艳瞬间 年化7763.90%， 一进二打板买下全市场
-# 作者：子匀
+# 三合一策略优化重构版
 
-# 克隆自聚宽文章：https://www.joinquant.com/post/48680
-# 标题：追首板涨停 过去两年年化304%
-# 作者：子匀
-
-# 克隆自聚宽文章：https://www.joinquant.com/post/44901
-# 标题：首板低开策略
-# 作者：wywy1995
-
-# 克隆自聚宽文章：https://www.joinquant.com/post/48523
-# 标题：一进二集合竞价策略
-# 作者：十足的小市值迷
-
-# 克隆自聚宽文章：https://www.joinquant.com/post/49364
-# 标题：一种弱转强的选股策略，年化100%以上
-# 作者：紫露薇霜
-
-# 2024/08/01  止损卖出修改为跌破5日均线
-
-from jqdata import *
-from jqfactor import *
-from jqlib.technical_analysis import *
 import datetime as dt
+
 import pandas as pd
-from datetime import datetime
-from datetime import timedelta
+from jqdata import *
 
 
 def initialize(context):
     set_option('use_real_price', True)
     log.set_level('system', 'error')
     set_option('avoid_future_data', True)
-    # 一进二
+
+    reset_runtime_state()
+
     run_daily(get_stock_list, '9:01')
     run_daily(buy, '09:26')
     run_daily(sell, time='11:25', reference_security='000300.XSHG')
     run_daily(sell, time='14:50', reference_security='000300.XSHG')
 
 
-# 选股
-def get_stock_list(context): 
-    # 文本日期
-    date = context.previous_date
+def reset_runtime_state():
+    g.pre_gap_up = []
+    g.pre_gap_down = []
+    g.pre_reversal = []
+    g.selection_trade_date = ''
 
-    date_2,date_1,date = get_trade_days( end_date=date, count=3)
-    # 初始列表
+
+def get_stock_list(context):
+    previous_trade_date = context.previous_date
+    date_2, date_1, date = get_trade_days(end_date=previous_trade_date, count=3)
     initial_list = prepare_stock_list(date)
-    # 昨日涨停
+
     hl0_list = get_hl_stock(initial_list, date)
-    # 前日曾涨停
     hl1_list = get_ever_hl_stock(initial_list, date_1)
-    # 前前日曾涨停
     hl2_list = get_ever_hl_stock(initial_list, date_2)
-    # 合并 hl1_list 和 hl2_list 为一个集合，用于快速查找需要剔除的元素  
-    elements_to_remove = set(hl1_list + hl2_list)  
-    # 使用列表推导式来剔除 hl_list 中存在于 elements_to_remove 集合中的元素  
-    g.gap_up = [stock for stock in hl0_list if stock not in elements_to_remove] 
-    # 昨日涨停，但前天没有涨停的
-    g.gap_down = [s for s in hl0_list if s not in hl1_list]
-     # 昨日曾涨停
-    h1_list = get_ever_hl_stock2(initial_list, date)
-    # 上上个交易日涨停过滤
-    elements_to_remove = get_hl_stock(initial_list, date_1)
-    
-    # 过滤上上个交易日涨停、曾涨停
-    g.reversal = [stock for stock in h1_list if stock not in elements_to_remove]
 
-    # 将非集合竞价过滤前置到选股阶段，buy 中仅保留集合竞价与下单逻辑
-    g.gk_preselected = []
-    g.dk_preselected = []
-    g.rzq_preselected = []
-    date_now = context.current_dt.strftime("%Y-%m-%d")
-    current_data = get_current_data()
+    gap_up_base = [stock for stock in hl0_list if stock not in set(hl1_list + hl2_list)]
+    gap_down_base = [stock for stock in hl0_list if stock not in hl1_list]
 
-    # 一进二：前置非竞价条件
-    for s in g.gap_up:
-        prev_day_data = attribute_history(s, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True)
-        avg_price_increase_value = prev_day_data['money'][0] / prev_day_data['volume'][0] / prev_day_data['close'][0] * 1.1 - 1
-        if avg_price_increase_value < 0.07 or prev_day_data['money'][0] < 5.5e8 or prev_day_data['money'][0] > 20e8:
+    reversal_base = get_ever_hl_stock2(initial_list, date)
+    previous_hl_list = get_hl_stock(initial_list, date_1)
+    reversal_base = [stock for stock in reversal_base if stock not in previous_hl_list]
+
+    g.pre_gap_up = filter_gap_up_candidates(context, gap_up_base)
+    g.pre_gap_down = filter_gap_down_candidates(gap_down_base, transform_date(date, 'str'))
+    g.pre_reversal = filter_reversal_candidates(context, reversal_base)
+    g.selection_trade_date = context.current_dt.strftime('%Y-%m-%d')
+
+    log_preselection_summary(
+        context.current_dt,
+        len(hl0_list),
+        len(hl1_list),
+        len(hl2_list),
+        len(g.pre_gap_up),
+        len(g.pre_gap_down),
+        len(g.pre_reversal),
+    )
+
+
+def filter_gap_up_candidates(context, stock_list):
+    candidates = []
+    for stock in stock_list:
+        prev_day_data = attribute_history(
+            stock, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True
+        )
+        if prev_day_data.empty:
             continue
-        turnover_ratio_data = get_valuation(s, start_date=context.previous_date, end_date=context.previous_date, fields=['turnover_ratio', 'market_cap', 'circulating_market_cap'])
-        if turnover_ratio_data.empty or turnover_ratio_data['market_cap'][0] < 70 or turnover_ratio_data['circulating_market_cap'][0] > 520:
+
+        prev_close = prev_day_data['close'][0]
+        prev_volume = prev_day_data['volume'][0]
+        prev_money = prev_day_data['money'][0]
+        if prev_close <= 0 or prev_volume <= 0:
             continue
-        if rise_low_volume(s, context):
+
+        avg_price_increase_value = prev_money / prev_volume / prev_close * 1.1 - 1
+        if avg_price_increase_value < 0.07 or prev_money < 5.5e8 or prev_money > 20e8:
             continue
-        g.gk_preselected.append(s)
 
-    # 首板低开：无集合竞价条件，全部前置
-    date = transform_date(context.previous_date, 'str')
-    if g.gap_down:
-        stock_list = g.gap_down
-        rpd = get_relative_position_df(stock_list, date, 60)
-        rpd = rpd[rpd['rp'] <= 0.5]
-        stock_list = list(rpd.index)
-
-        df = get_price(stock_list, end_date=date, frequency='daily', fields=['close'], count=1, panel=False, fill_paused=False, skip_paused=True).set_index('code') if len(stock_list) != 0 else pd.DataFrame()
-        if len(stock_list) != 0:
-            df['open_pct'] = [current_data[s].day_open / df.loc[s, 'close'] for s in stock_list]
-            df = df[(0.955 <= df['open_pct']) & (df['open_pct'] <= 0.97)]
-            stock_list = list(df.index)
-
-        for s in stock_list:
-            prev_day_data = attribute_history(s, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True)
-            if prev_day_data['money'][0] >= 1e8:
-                g.dk_preselected.append(s)
-
-    # 弱转强：前置非竞价条件
-    for s in g.reversal:
-        price_data = attribute_history(s, 4, '1d', fields=['close'], skip_paused=True)
-        if len(price_data) < 4:
+        valuation_data = get_valuation(
+            stock,
+            start_date=context.previous_date,
+            end_date=context.previous_date,
+            fields=['turnover_ratio', 'market_cap', 'circulating_market_cap'],
+        )
+        if valuation_data.empty:
             continue
+        if valuation_data['market_cap'][0] < 70 or valuation_data['circulating_market_cap'][0] > 520:
+            continue
+
+        if rise_low_volume(stock):
+            continue
+
+        candidates.append(stock)
+    return candidates
+
+
+def filter_gap_down_candidates(stock_list, date):
+    if not stock_list:
+        return []
+
+    rpd = get_relative_position_df(stock_list, date, 60)
+    if rpd.empty:
+        return []
+
+    return list(rpd[rpd['rp'] <= 0.5].index)
+
+
+def filter_reversal_candidates(context, stock_list):
+    candidates = []
+    for stock in stock_list:
+        price_data = attribute_history(stock, 4, '1d', fields=['close'], skip_paused=True)
+        if len(price_data) < 4 or price_data['close'][0] <= 0:
+            continue
+
         increase_ratio = (price_data['close'][-1] - price_data['close'][0]) / price_data['close'][0]
         if increase_ratio > 0.28:
             continue
 
-        prev_day_data = attribute_history(s, 1, '1d', fields=['open', 'close'], skip_paused=True)
-        if len(prev_day_data) < 1:
+        prev_oc_data = attribute_history(stock, 1, '1d', fields=['open', 'close'], skip_paused=True)
+        if prev_oc_data.empty or prev_oc_data['open'][0] <= 0:
             continue
-        open_close_ratio = (prev_day_data['close'][0] - prev_day_data['open'][0]) / prev_day_data['open'][0]
+
+        open_close_ratio = (prev_oc_data['close'][0] - prev_oc_data['open'][0]) / prev_oc_data['open'][0]
         if open_close_ratio < -0.05:
             continue
 
-        prev_day_data = attribute_history(s, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True)
-        avg_price_increase_value = prev_day_data['money'][0] / prev_day_data['volume'][0] / prev_day_data['close'][0] - 1
-        if avg_price_increase_value < -0.04 or prev_day_data['money'][0] < 3e8 or prev_day_data['money'][0] > 19e8:
+        prev_day_data = attribute_history(
+            stock, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True
+        )
+        if prev_day_data.empty:
             continue
-        turnover_ratio_data = get_valuation(s, start_date=context.previous_date, end_date=context.previous_date, fields=['turnover_ratio', 'market_cap', 'circulating_market_cap'])
-        if turnover_ratio_data.empty or turnover_ratio_data['market_cap'][0] < 70 or turnover_ratio_data['circulating_market_cap'][0] > 520:
+
+        prev_close = prev_day_data['close'][0]
+        prev_volume = prev_day_data['volume'][0]
+        prev_money = prev_day_data['money'][0]
+        if prev_close <= 0 or prev_volume <= 0:
             continue
-        if rise_low_volume(s, context):
+
+        avg_price_increase_value = prev_money / prev_volume / prev_close - 1
+        if avg_price_increase_value < -0.04 or prev_money < 3e8 or prev_money > 19e8:
             continue
-        g.rzq_preselected.append(s)
+
+        valuation_data = get_valuation(
+            stock,
+            start_date=context.previous_date,
+            end_date=context.previous_date,
+            fields=['turnover_ratio', 'market_cap', 'circulating_market_cap'],
+        )
+        if valuation_data.empty:
+            continue
+        if valuation_data['market_cap'][0] < 70 or valuation_data['circulating_market_cap'][0] > 520:
+            continue
+
+        if rise_low_volume(stock):
+            continue
+
+        candidates.append(stock)
+    return candidates
 
 
-
-# 交易
 def buy(context):
-    qualified_stocks = [] 
-    gk_stocks=[]
-    dk_stocks=[]
-    rzq_stocks=[]
+    qualified_stocks = []
+    gk_stocks = []
+    dk_stocks = []
+    rzq_stocks = []
+
     current_data = get_current_data()
-    date_now = context.current_dt.strftime("%Y-%m-%d")
-    mid_time1 = ' 09:15:00'
-    end_times1 =  ' 09:26:00'
-    start = date_now + mid_time1
-    end = date_now + end_times1
-    # 一进二：仅保留集合竞价过滤
-    for s in getattr(g, 'gk_preselected', []):
-        prev_day_data = attribute_history(s, 1, '1d', fields=['volume'], skip_paused=True)
-        auction_data = get_call_auction(s, start_date=date_now, end_date=date_now, fields=['time','volume', 'current'])
-        if auction_data.empty or auction_data['volume'][0] / prev_day_data['volume'][-1] < 0.03:
-            continue
-        current_ratio = auction_data['current'][0] / (current_data[s].high_limit/1.1)
-        if current_ratio<=1 or current_ratio>=1.06:
-            continue
+    date_now = context.current_dt.strftime('%Y-%m-%d')
+    previous_date = transform_date(context.previous_date, 'str')
 
-        # 如果股票满足所有条件，则添加到列表中  
-        gk_stocks.append(s)
-        qualified_stocks.append(s)
-
-    # 首板低开：预选股直接进入待买列表（无集合竞价过滤）
-    dk_stocks = list(getattr(g, 'dk_preselected', []))
+    gk_stocks = filter_gap_up_by_auction(g.pre_gap_up, current_data, date_now)
+    dk_stocks = filter_gap_down_by_open(g.pre_gap_down, current_data, previous_date)
+    rzq_stocks = filter_reversal_by_auction(g.pre_reversal, current_data, date_now)
+    qualified_stocks.extend(gk_stocks)
     qualified_stocks.extend(dk_stocks)
+    qualified_stocks.extend(rzq_stocks)
 
-    # 弱转强：仅保留集合竞价过滤
-    for s in getattr(g, 'rzq_preselected', []):
-        prev_day_data = attribute_history(s, 1, '1d', fields=['volume'], skip_paused=True)
-        auction_data = get_call_auction(s, start_date=date_now, end_date=date_now, fields=['time','volume', 'current'])
-        if auction_data.empty or auction_data['volume'][0] / prev_day_data['volume'][-1] < 0.03:
-            continue
-        current_ratio = auction_data['current'][0] / (current_data[s].high_limit/1.1)
-        if current_ratio <= 0.98 or current_ratio >= 1.09:
-            continue
-        rzq_stocks.append(s)
-        qualified_stocks.append(s)
-    
-    qualified_stocks = list(dict.fromkeys(qualified_stocks))
+    log_auction_summary(
+        context.current_dt,
+        gk_stocks,
+        dk_stocks,
+        rzq_stocks,
+    )
 
-    if len(qualified_stocks)>0:
-        print('———————————————————————————————————')
-        send_message('今日选股：'+','.join(qualified_stocks))
-        print('一进二：'+','.join(gk_stocks))
-        print('首板低开：'+','.join(dk_stocks))
-        print('弱转强：'+','.join(rzq_stocks))
-        print('今日选股：'+','.join(qualified_stocks))
-        print('———————————————————————————————————')
+    if qualified_stocks:
+        send_message('今日选股：' + ','.join(qualified_stocks))
     else:
         send_message('今日无目标个股')
-        print('今日无目标个股')  
-    
-    
-    buy_success = []
-    if len(qualified_stocks)!=0  and context.portfolio.available_cash/context.portfolio.total_value>0.3:
-        value = context.portfolio.available_cash / len(qualified_stocks)
-        for s in qualified_stocks:
-            # 下单
-            #由于关闭了错误日志，不加这一句，不足一手买入失败也会打印买入，造成日志不准确
-            if context.portfolio.available_cash/current_data[s].last_price>100: 
-                order_value(s, value, MarketOrderStyle(current_data[s].day_open))
-                buy_success.append(s)
-                print('买入' + s)
-                print('———————————————————————————————————')
 
-    buy_success_set = set(buy_success)
-    print('【子策略统计】')
-    print('一进二：初始池子数=%d，预选股数=%d，实际买入数=%d' % (
-        len(getattr(g, 'gap_up', [])),
-        len(getattr(g, 'gk_preselected', [])),
-        len([s for s in gk_stocks if s in buy_success_set])
-    ))
-    print('首板低开：初始池子数=%d，预选股数=%d，实际买入数=%d' % (
-        len(getattr(g, 'gap_down', [])),
-        len(getattr(g, 'dk_preselected', [])),
-        len([s for s in dk_stocks if s in buy_success_set])
-    ))
-    print('弱转强：初始池子数=%d，预选股数=%d，实际买入数=%d' % (
-        len(getattr(g, 'reversal', [])),
-        len(getattr(g, 'rzq_preselected', [])),
-        len([s for s in rzq_stocks if s in buy_success_set])
-    ))
-    print('———————————————————————————————————')
+    if not qualified_stocks:
+        print('今日无目标个股')
+        return
 
-# 处理日期相关函数
+    if context.portfolio.total_value <= 0:
+        return
+    if context.portfolio.available_cash / context.portfolio.total_value <= 0.3:
+        return
+
+    value = context.portfolio.available_cash / len(qualified_stocks)
+    for stock in qualified_stocks:
+        last_price = current_data[stock].last_price
+        if last_price <= 0:
+            continue
+        if context.portfolio.available_cash / last_price > 100:
+            order_value(stock, value, MarketOrderStyle(current_data[stock].day_open))
+            print('买入' + stock)
+            print('———————————————————————————————————')
+
+
+def filter_gap_up_by_auction(stock_list, current_data, date_now):
+    selected = []
+    for stock in stock_list:
+        prev_day_data = attribute_history(stock, 1, '1d', fields=['volume'], skip_paused=True)
+        if prev_day_data.empty or prev_day_data['volume'][0] <= 0:
+            continue
+
+        auction_data = get_call_auction(
+            stock, start_date=date_now, end_date=date_now, fields=['time', 'volume', 'current']
+        )
+        if auction_data.empty:
+            continue
+        if auction_data['volume'][0] / prev_day_data['volume'][0] < 0.03:
+            continue
+
+        high_limit = current_data[stock].high_limit
+        if high_limit <= 0:
+            continue
+        current_ratio = auction_data['current'][0] / (high_limit / 1.1)
+        if current_ratio <= 1 or current_ratio >= 1.06:
+            continue
+
+        selected.append(stock)
+    return selected
+
+
+def filter_gap_down_by_open(stock_list, current_data, previous_date):
+    if not stock_list:
+        return []
+
+    df = get_price(
+        stock_list,
+        end_date=previous_date,
+        frequency='daily',
+        fields=['close'],
+        count=1,
+        panel=False,
+        fill_paused=False,
+        skip_paused=True,
+    )
+    if df.empty:
+        return []
+
+    df = df.set_index('code')
+    open_filtered = []
+    for stock in stock_list:
+        if stock not in df.index:
+            continue
+
+        prev_close = df.loc[stock, 'close']
+        day_open = current_data[stock].day_open
+        if pd.isnull(prev_close) or prev_close <= 0 or day_open <= 0:
+            continue
+
+        open_pct = day_open / prev_close
+        if 0.955 <= open_pct <= 0.97:
+            open_filtered.append(stock)
+
+    selected = []
+    for stock in open_filtered:
+        prev_day_data = attribute_history(stock, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True)
+        if prev_day_data.empty:
+            continue
+        if prev_day_data['money'][0] >= 1e8:
+            selected.append(stock)
+    return selected
+
+
+def filter_reversal_by_auction(stock_list, current_data, date_now):
+    selected = []
+    for stock in stock_list:
+        prev_day_data = attribute_history(stock, 1, '1d', fields=['volume'], skip_paused=True)
+        if prev_day_data.empty or prev_day_data['volume'][0] <= 0:
+            continue
+
+        auction_data = get_call_auction(
+            stock, start_date=date_now, end_date=date_now, fields=['time', 'volume', 'current']
+        )
+        if auction_data.empty:
+            continue
+        if auction_data['volume'][0] / prev_day_data['volume'][0] < 0.03:
+            continue
+
+        high_limit = current_data[stock].high_limit
+        if high_limit <= 0:
+            continue
+        current_ratio = auction_data['current'][0] / (high_limit / 1.1)
+        if current_ratio <= 0.98 or current_ratio >= 1.09:
+            continue
+
+        selected.append(stock)
+    return selected
+
+
+def log_preselection_summary(current_dt, hl0_count, hl1_count, hl2_count, gap_up_count, gap_down_count, reversal_count):
+    lines = [
+        '%s 选股开始, T涨停%s只，T-1曾涨停%s只，T-2曾涨停%s只。'
+        % (format_log_date(current_dt), hl0_count, hl1_count, hl2_count),
+        '',
+        '初选：',
+        '一进二 %s只' % gap_up_count,
+        '低开 %s只' % gap_down_count,
+        '弱转强 %s只' % reversal_count,
+        '',
+    ]
+    log_multiline(lines)
+
+
+def log_auction_summary(current_dt, gap_up_selected, gap_down_selected, reversal_selected):
+    total_count = len(gap_up_selected + gap_down_selected + reversal_selected)
+    lines = [
+        '%s 集合竞价共选中%s只，如下：' % (format_log_date(current_dt), total_count),
+        '一进二：%s只，%s' % (len(gap_up_selected), gap_up_selected),
+        '低开：%s只，%s' % (len(gap_down_selected), gap_down_selected),
+        '弱转强：%s只，%s' % (len(reversal_selected), reversal_selected),
+        '',
+    ]
+    log_multiline(lines)
+
+
+def log_multiline(lines):
+    text = '\n'.join(lines)
+    print(text)
+    log.info(text)
+
+
+def format_log_date(date_value):
+    return transform_date(date_value, 'dt').strftime('%Y.%m%d')
+
+
 def transform_date(date, date_type):
-    if type(date) == str:
+    if isinstance(date, str):
         str_date = date
         dt_date = dt.datetime.strptime(date, '%Y-%m-%d')
         d_date = dt_date.date()
-    elif type(date) == dt.datetime:
+    elif isinstance(date, dt.datetime):
         str_date = date.strftime('%Y-%m-%d')
         dt_date = date
         d_date = dt_date.date()
-    elif type(date) == dt.date:
+    elif isinstance(date, dt.date):
         str_date = date.strftime('%Y-%m-%d')
         dt_date = dt.datetime.strptime(str_date, '%Y-%m-%d')
         d_date = date
-    dct = {'str':str_date, 'dt':dt_date, 'd':d_date}
+    dct = {'str': str_date, 'dt': dt_date, 'd': d_date}
     return dct[date_type]
 
+
 def get_shifted_date(date, days, days_type='T'):
-    #获取上一个自然日
     d_date = transform_date(date, 'd')
     yesterday = d_date + dt.timedelta(-1)
-    #移动days个自然日
     if days_type == 'N':
-        shifted_date = yesterday + dt.timedelta(days+1)
-    #移动days个交易日
+        shifted_date = yesterday + dt.timedelta(days + 1)
     if days_type == 'T':
         all_trade_days = [i.strftime('%Y-%m-%d') for i in list(get_all_trade_days())]
-        #如果上一个自然日是交易日，根据其在交易日列表中的index计算平移后的交易日        
         if str(yesterday) in all_trade_days:
             shifted_date = all_trade_days[all_trade_days.index(str(yesterday)) + days + 1]
-        #否则，从上一个自然日向前数，先找到最近一个交易日，再开始平移
         else:
             for i in range(100):
                 last_trade_date = yesterday - dt.timedelta(i)
@@ -264,215 +373,160 @@ def get_shifted_date(date, days, days_type='T'):
     return str(shifted_date)
 
 
-
-# 过滤函数
 def filter_new_stock(initial_list, date, days=50):
     d_date = transform_date(date, 'd')
     return [stock for stock in initial_list if d_date - get_security_info(stock).start_date > dt.timedelta(days=days)]
 
+
 def filter_st_paused_stock(initial_list):
     current_data = get_current_data()
-    # 使用列表推导式结合any()函数，筛选出符合条件的股票
-    return [stock for stock in initial_list 
-            if not any([
-                current_data[stock].is_st,          # 排除ST股
-                current_data[stock].paused,         # 排除停牌股
-                '退' in current_data[stock].name    # 排除名称中含'退'字的股票，避免退市股
-            ])]
+    return [
+        stock for stock in initial_list
+        if not any([
+            current_data[stock].is_st,
+            current_data[stock].paused,
+            '退' in current_data[stock].name,
+        ])
+    ]
+
 
 def filter_kcbj_stock(initial_list):
-    return [stock for stock in initial_list if stock[:2] in (('60','00'))]
+    return [stock for stock in initial_list if stock[:2] in ('60', '00', '30')]
 
 
-def filter_st_stock(initial_list, date):
-    str_date = transform_date(date, 'str')
-    if get_shifted_date(str_date, 0, 'N') != get_shifted_date(str_date, 0, 'T'):
-        str_date = get_shifted_date(str_date, -1, 'T')
-    df = get_extras('is_st', initial_list, start_date=str_date, end_date=str_date, df=True)
-    df = df.T
-    df.columns = ['is_st']
-    df = df[df['is_st'] == False]
-    filter_list = list(df.index)
-    return filter_list
-
-
-
-def filter_paused_stock(initial_list, date):
-    df = get_price(initial_list, end_date=date, frequency='daily', fields=['paused'], count=1, panel=False, fill_paused=True)
-    df = df[df['paused'] == 0]
-    paused_list = list(df.code)
-    return paused_list
-
-# 一字
-def filter_extreme_limit_stock(context, stock_list, date):
-    tmp = []
-    for stock in stock_list:
-        df = get_price(stock, end_date=date, frequency='daily', fields=['low','high_limit'], count=1, panel=False)
-        if df.iloc[0,0] < df.iloc[0,1]:
-            tmp.append(stock)
-    return tmp
-
-
-
-# 每日初始股票池
-def prepare_stock_list(date): 
+def prepare_stock_list(date):
     initial_list = get_all_securities('stock', date).index.tolist()
     initial_list = filter_kcbj_stock(initial_list)
     initial_list = filter_new_stock(initial_list, date)
-    # initial_list = filter_st_stock(initial_list, date)
-    # initial_list = filter_paused_stock(initial_list, date)
     initial_list = filter_st_paused_stock(initial_list)
     return initial_list
 
 
+def rise_low_volume(stock):
+    hist = attribute_history(stock, 106, '1d', fields=['high', 'volume'], skip_paused=True, df=False)
+    if len(hist['high']) < 102 or len(hist['volume']) < 2:
+        return False
 
-def rise_low_volume(s, context):   # 上涨时，未放量 rising on low volume
-    hist = attribute_history(s, 106, '1d', fields=['high','volume'], skip_paused=True,df=False)
     high_prices = hist['high'][:102]
     prev_high = high_prices[-1]
-    zyts_0 = next((i-1 for i, high in enumerate(high_prices[-3::-1], 2) if high >= prev_high), 100)
+    zyts_0 = next((i - 1 for i, high in enumerate(high_prices[-3::-1], 2) if high >= prev_high), 100)
     zyts = zyts_0 + 5
-    if  hist['volume'][-1] <= max(hist['volume'][-zyts:-1]) * 0.9:
+    if hist['volume'][-1] <= max(hist['volume'][-zyts:-1]) * 0.9:
         return True
     return False
 
-# 筛选出某一日涨停的股票
+
 def get_hl_stock(initial_list, date):
-    df = get_price(initial_list, end_date=date, frequency='daily', fields=['close','high_limit'], count=1, panel=False, fill_paused=False, skip_paused=False)
-    df = df.dropna() #去除停牌
+    df = get_price(
+        initial_list,
+        end_date=date,
+        frequency='daily',
+        fields=['close', 'high_limit'],
+        count=1,
+        panel=False,
+        fill_paused=False,
+        skip_paused=False,
+    )
+    df = df.dropna()
     df = df[df['close'] == df['high_limit']]
-    hl_list = list(df.code)
-    return hl_list
-    
-# 筛选曾涨停
+    return list(df.code)
+
+
 def get_ever_hl_stock(initial_list, date):
-    df = get_price(initial_list, end_date=date, frequency='daily', fields=['high','high_limit'], count=1, panel=False, fill_paused=False, skip_paused=False)
-    df = df.dropna() #去除停牌
+    df = get_price(
+        initial_list,
+        end_date=date,
+        frequency='daily',
+        fields=['high', 'high_limit'],
+        count=1,
+        panel=False,
+        fill_paused=False,
+        skip_paused=False,
+    )
+    df = df.dropna()
     df = df[df['high'] == df['high_limit']]
-    hl_list = list(df.code)
-    return hl_list
+    return list(df.code)
 
-# 筛选曾涨停
+
 def get_ever_hl_stock2(initial_list, date):
-    df = get_price(initial_list, end_date=date, frequency='daily', fields=['close','high','high_limit'], count=1, panel=False, fill_paused=False, skip_paused=False)
-    df = df.dropna() #去除停牌
-    cd1 = df['high'] == df['high_limit'] 
-    cd2 = df['close']!= df['high_limit']
-    df = df[cd1 & cd2]
-    hl_list = list(df.code)
-    return hl_list
+    df = get_price(
+        initial_list,
+        end_date=date,
+        frequency='daily',
+        fields=['close', 'high', 'high_limit'],
+        count=1,
+        panel=False,
+        fill_paused=False,
+        skip_paused=False,
+    )
+    df = df.dropna()
+    df = df[(df['high'] == df['high_limit']) & (df['close'] != df['high_limit'])]
+    return list(df.code)
 
-# 计算涨停数
-def get_hl_count_df(hl_list, date, watch_days):
-    # 获取watch_days的数据
-    df = get_price(hl_list, end_date=date, frequency='daily', fields=['close','high_limit','low'], count=watch_days, panel=False, fill_paused=False, skip_paused=False)
-    df.index = df.code
-    #计算涨停与一字涨停数，一字涨停定义为最低价等于涨停价
-    hl_count_list = []
-    extreme_hl_count_list = []
-    for stock in hl_list:
-        df_sub = df.loc[stock]
-        hl_days = df_sub[df_sub.close==df_sub.high_limit].high_limit.count()
-        extreme_hl_days = df_sub[df_sub.low==df_sub.high_limit].high_limit.count()
-        hl_count_list.append(hl_days)
-        extreme_hl_count_list.append(extreme_hl_days)
-    #创建df记录
-    df = pd.DataFrame(index=hl_list, data={'count':hl_count_list, 'extreme_count':extreme_hl_count_list})
-    return df
 
-# 计算连板数
-def get_continue_count_df(hl_list, date, watch_days):
-    df = pd.DataFrame()
-    for d in range(2, watch_days+1):
-        HLC = get_hl_count_df(hl_list, date, d)
-        CHLC = HLC[HLC['count'] == d]
-        df = df.append(CHLC)
-    stock_list = list(set(df.index))
-    ccd = pd.DataFrame()
-    for s in stock_list:
-        tmp = df.loc[[s]]
-        if len(tmp) > 1:
-            M = tmp['count'].max()
-            tmp = tmp[tmp['count'] == M]
-        ccd = ccd.append(tmp)
-    if len(ccd) != 0:
-        ccd = ccd.sort_values(by='count', ascending=False)    
-    return ccd
+def get_relative_position_df(stock_list, date, watch_days):
+    if not stock_list:
+        return pd.DataFrame(columns=['rp'])
 
-# 计算昨涨幅
-def get_index_increase_ratio(index_code, context):
-    # 获取指数昨天和前天的收盘价
-    close_prices = attribute_history(index_code, 2, '1d', fields=['close'], skip_paused=True)
-    if len(close_prices) < 2:
-        return 0  # 如果数据不足，返回0
-    day_before_yesterday_close = close_prices['close'][0]
-    yesterday_close = close_prices['close'][1]
-    
-    # 计算涨幅
-    increase_ratio = (yesterday_close - day_before_yesterday_close) / day_before_yesterday_close
-    return increase_ratio
+    df = get_price(
+        stock_list,
+        end_date=date,
+        fields=['high', 'low', 'close'],
+        count=watch_days,
+        fill_paused=False,
+        skip_paused=False,
+        panel=False,
+    ).dropna()
+    if df.empty:
+        return pd.DataFrame(columns=['rp'])
 
-#上午有利润就跑
+    close = df.groupby('code').apply(lambda df_sub: df_sub.iloc[-1, -1])
+    high = df.groupby('code').apply(lambda df_sub: df_sub['high'].max())
+    low = df.groupby('code').apply(lambda df_sub: df_sub['low'].min())
+    result = pd.DataFrame()
+    result['close'] = close
+    result['high'] = high
+    result['low'] = low
+    result = result[result['high'] > result['low']]
+    result['rp'] = (result['close'] - result['low']) / (result['high'] - result['low'])
+    return result[['rp']]
+
+
 def sell(context):
-    # 基础信息
     date = transform_date(context.previous_date, 'str')
     current_data = get_current_data()
-    
-    
-    # 根据时间执行不同的卖出策略
-    if str(context.current_dt)[-8:] == '11:25:00' :
-        for s in list(context.portfolio.positions):
-            if ((context.portfolio.positions[s].closeable_amount != 0) and (current_data[s].last_price < current_data[s].high_limit) and (current_data[s].last_price > 1*context.portfolio.positions[s].avg_cost)):#avg_cost当前持仓成本
-                order_target_value(s, 0)
-                print( '止盈卖出', [s,get_security_info(s, date).display_name])
+
+    if str(context.current_dt)[-8:] == '11:25:00':
+        for stock in list(context.portfolio.positions):
+            position = context.portfolio.positions[stock]
+            if (
+                position.closeable_amount != 0
+                and current_data[stock].last_price < current_data[stock].high_limit
+                and current_data[stock].last_price > position.avg_cost
+            ):
+                order_target_value(stock, 0)
+                print('止盈卖出', [stock, get_security_info(stock, date).display_name])
                 print('———————————————————————————————————')
-    
+
     if str(context.current_dt)[-8:] == '14:50:00':
-        for s in list(context.portfolio.positions):
+        for stock in list(context.portfolio.positions):
+            position = context.portfolio.positions[stock]
+            close_data = attribute_history(stock, 4, '1d', ['close'])
+            if close_data.empty:
+                continue
 
-            close_data2 = attribute_history(s, 4, '1d', ['close'])
-            M4=close_data2['close'].mean()
-            MA5=(M4*4+current_data[s].last_price)/5
-            if ((context.portfolio.positions[s].closeable_amount != 0) and (current_data[s].last_price < current_data[s].high_limit) and (current_data[s].last_price > 1*context.portfolio.positions[s].avg_cost)):#avg_cost当前持仓成本
-                order_target_value(s, 0)
-                print( '止盈卖出', [s,get_security_info(s, date).display_name])
+            ma4 = close_data['close'].mean()
+            ma5 = (ma4 * 4 + current_data[stock].last_price) / 5
+
+            if (
+                position.closeable_amount != 0
+                and current_data[stock].last_price < current_data[stock].high_limit
+                and current_data[stock].last_price > position.avg_cost
+            ):
+                order_target_value(stock, 0)
+                print('止盈卖出', [stock, get_security_info(stock, date).display_name])
                 print('———————————————————————————————————')
-            elif ((context.portfolio.positions[s].closeable_amount != 0) and (current_data[s].last_price < MA5)):
-                #closeable_amount可卖出的仓位
-                order_target_value(s, 0)
-                print( '止损卖出', [s,get_security_info(s, date).display_name])
-                print('———————————————————————————————————')  
-                
-                
-# 首版低开策略代码                
-def filter_new_stock2(initial_list, date, days=250):
-    d_date = transform_date(date, 'd')
-    return [stock for stock in initial_list if d_date - get_security_info(stock).start_date > dt.timedelta(days=days)]
-    
-    
-# 每日初始股票池
-def prepare_stock_list2(date): 
-    initial_list = get_all_securities('stock', date).index.tolist()
-    initial_list = filter_kcbj_stock(initial_list)
-    initial_list = filter_new_stock2(initial_list, date)
-    initial_list = filter_st_stock(initial_list, date)
-    initial_list = filter_paused_stock(initial_list, date)
-    return initial_list    
-    
-# 计算股票处于一段时间内相对位置
-def get_relative_position_df(stock_list, date, watch_days):
-    if len(stock_list) != 0:
-        df = get_price(stock_list, end_date=date, fields=['high', 'low', 'close'], count=watch_days, fill_paused=False, skip_paused=False, panel=False).dropna()
-        close = df.groupby('code').apply(lambda df: df.iloc[-1,-1])
-        high = df.groupby('code').apply(lambda df: df['high'].max())
-        low = df.groupby('code').apply(lambda df: df['low'].min())
-        result = pd.DataFrame()
-        result['rp'] = (close-low) / (high-low)
-        return result
-    else:
-        return pd.DataFrame(columns=['rp'])    
-    
-
-
-
-
+            elif position.closeable_amount != 0 and current_data[stock].last_price < ma5:
+                order_target_value(stock, 0)
+                print('止损卖出', [stock, get_security_info(stock, date).display_name])
+                print('———————————————————————————————————')
