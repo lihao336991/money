@@ -850,8 +850,8 @@ def init(C):
         C.yesterday = get_previous_trading_day(C, C.today.date()).strftime("%Y%m%d")
 
     # 周末检查
-    if not C.do_back_test and not is_trading(C.context):
-        print('当前日期为周末，不执行任务')
+    if not C.do_back_test and not is_trading(C):
+        print('当前日期为非交易日，不执行任务')
         return
     
     if C.do_back_test:
@@ -874,7 +874,7 @@ def init(C):
     print("【初始化】策略初始化完成")
 
     # debug 实盘直接运行
-    get_stock_list_func(C)
+    # get_stock_list_func(C)
     # buy_func(C)
 
 def handlebar(C):
@@ -899,10 +899,13 @@ def handlebar(C):
 
 # 前置增加开盘检测
 def is_trading(context):
-    today_str = datetime.datetime.now().strftime("%Y%m%d")
-    trade_days = context.get_trading_dates(stockcode='SH', start_date=today_str, end_date=today_str, count=1, period='1d')
-    print('当前交易日历：', trade_days, today_str)
-    return trade_days and today_str in trade_days
+    try:
+        today_str = datetime.datetime.now().strftime("%Y%m%d")
+        trade_days = context.get_trading_dates(stockcode='SH', start_date=today_str, end_date=today_str, count=1, period='1d')
+        return trade_days and today_str in trade_days
+    except Exception as e:
+        print(f'is_trading 检测异常: {e}，保守返回 False')
+        return False
 
 def orderError_callback(context, orderArgs, errMsg):
     messager.send_message(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")

@@ -725,10 +725,13 @@ def orderError_callback(context, orderArgs, errMsg):
 
 # 前置增加开盘检测
 def is_trading(context):
-    today_str = datetime.now().strftime("%Y%m%d")
-    trade_days = context.get_trading_dates(stockcode='SH', start_date=today_str, end_date=today_str, count=1, period='1d')
-    print('当前交易日历：', trade_days, today_str)
-    return trade_days and today_str in trade_days
+    try:
+        today_str = datetime.now().strftime("%Y%m%d")
+        trade_days = context.get_trading_dates(stockcode='SH', start_date=today_str, end_date=today_str, count=1, period='1d')
+        return trade_days and today_str in trade_days
+    except Exception as e:
+        print(f'is_trading 检测异常: {e}，保守返回 False')
+        return False
 
 
 
