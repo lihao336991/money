@@ -899,9 +899,9 @@ def handlebar(C):
 
 # 前置增加开盘检测
 def is_trading(context):
-    current_weekday = datetime.datetime.now().weekday()
-    is_weekend = current_weekday >= 5  # 5表示周六，6表示周日
-    return (context.get_instrumentdetail('600000.SH')['IsTrading'] or context.get_instrumentdetail('600036.SH')['IsTrading'] or context.get_instrumentdetail('600519.SH')['IsTrading']) and not is_weekend
+    today_str = datetime.datetime.now().strftime("%Y%m%d")
+    trade_days = context.get_trading_dates(stockcode='SH', start_date=today_str, end_date=today_str, count=1, period='1d')
+    return trade_days and today_str in trade_days
 
 def orderError_callback(context, orderArgs, errMsg):
     messager.send_message(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
