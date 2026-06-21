@@ -1,5 +1,6 @@
-# 三合一策略优化重构版
+# 三合一策略优化重构版 v2
 # 代码结构更好，但是参数数值没有改变
+# 买入采用排他优先级：一进二 > 低开 > 弱转强
 
 import datetime as dt
 
@@ -182,6 +183,7 @@ def buy(context):
     gk_stocks = filter_gap_up_by_auction(g.pre_gap_up, current_data, date_now)
     dk_stocks = filter_gap_down_by_open(g.pre_gap_down, current_data, previous_date)
     rzq_stocks = filter_reversal_by_auction(g.pre_reversal, current_data, date_now)
+    gk_stocks, dk_stocks, rzq_stocks = apply_exclusive_priority(gk_stocks, dk_stocks, rzq_stocks)
     strategy_by_stock = build_strategy_map(gk_stocks, dk_stocks, rzq_stocks)
     qualified_stocks.extend(gk_stocks)
     qualified_stocks.extend(dk_stocks)
@@ -218,6 +220,14 @@ def buy(context):
             tag_position_strategy(stock, strategy_by_stock)
             print('买入' + stock)
             print('———————————————————————————————————')
+
+
+def apply_exclusive_priority(gap_up_selected, gap_down_selected, reversal_selected):
+    if gap_up_selected:
+        return gap_up_selected, [], []
+    if gap_down_selected:
+        return [], gap_down_selected, []
+    return [], [], reversal_selected
 
 
 def build_strategy_map(gap_up_selected, gap_down_selected, reversal_selected):

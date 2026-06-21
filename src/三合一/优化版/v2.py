@@ -1,5 +1,6 @@
-# 三合一策略优化重构版
+# 三合一策略优化重构版 v2
 # 代码结构更好，但是参数数值没有改变
+# 买入采用排他优先级：一进二 > 低开
 
 import datetime as dt
 
@@ -7,7 +8,7 @@ import pandas as pd
 from jqdata import *
 
 
-STRATEGIES = ['一进二', '低开', '弱转强']
+STRATEGIES = ['一进二', '低开']
 
 
 def initialize(context):
@@ -29,7 +30,6 @@ def initialize(context):
 def reset_runtime_state():
     g.pre_gap_up = []
     g.pre_gap_down = []
-    g.pre_reversal = []
     g.selection_trade_date = ''
     g.stock_strategy = {}
     g.strategy_realized_pnl = {strategy: 0.0 for strategy in STRATEGIES}
@@ -48,13 +48,8 @@ def get_stock_list(context):
     gap_up_base = [stock for stock in hl0_list if stock not in set(hl1_list + hl2_list)]
     gap_down_base = [stock for stock in hl0_list if stock not in hl1_list]
 
-    reversal_base = get_ever_hl_stock2(initial_list, date)
-    previous_hl_list = get_hl_stock(initial_list, date_1)
-    reversal_base = [stock for stock in reversal_base if stock not in previous_hl_list]
-
     g.pre_gap_up = filter_gap_up_candidates(context, gap_up_base)
     g.pre_gap_down = filter_gap_down_candidates(gap_down_base, transform_date(date, 'str'))
-    g.pre_reversal = filter_reversal_candidates(context, reversal_base)
     g.selection_trade_date = context.current_dt.strftime('%Y-%m-%d')
 
     log_preselection_summary(
@@ -64,7 +59,6 @@ def get_stock_list(context):
         len(hl2_list),
         len(g.pre_gap_up),
         len(g.pre_gap_down),
-        len(g.pre_reversal),
     )
 
 
@@ -116,64 +110,10 @@ def filter_gap_down_candidates(stock_list, date):
     return list(rpd[rpd['rp'] <= 0.5].index)
 
 
-def filter_reversal_candidates(context, stock_list):
-    candidates = []
-    for stock in stock_list:
-        price_data = attribute_history(stock, 4, '1d', fields=['close'], skip_paused=True)
-        if len(price_data) < 4 or price_data['close'][0] <= 0:
-            continue
-
-        increase_ratio = (price_data['close'][-1] - price_data['close'][0]) / price_data['close'][0]
-        if increase_ratio > 0.28:
-            continue
-
-        prev_oc_data = attribute_history(stock, 1, '1d', fields=['open', 'close'], skip_paused=True)
-        if prev_oc_data.empty or prev_oc_data['open'][0] <= 0:
-            continue
-
-        open_close_ratio = (prev_oc_data['close'][0] - prev_oc_data['open'][0]) / prev_oc_data['open'][0]
-        if open_close_ratio < -0.05:
-            continue
-
-        prev_day_data = attribute_history(
-            stock, 1, '1d', fields=['close', 'volume', 'money'], skip_paused=True
-        )
-        if prev_day_data.empty:
-            continue
-
-        prev_close = prev_day_data['close'][0]
-        prev_volume = prev_day_data['volume'][0]
-        prev_money = prev_day_data['money'][0]
-        if prev_close <= 0 or prev_volume <= 0:
-            continue
-
-        avg_price_increase_value = prev_money / prev_volume / prev_close - 1
-        if avg_price_increase_value < -0.04 or prev_money < 3e8 or prev_money > 19e8:
-            continue
-
-        valuation_data = get_valuation(
-            stock,
-            start_date=context.previous_date,
-            end_date=context.previous_date,
-            fields=['turnover_ratio', 'market_cap', 'circulating_market_cap'],
-        )
-        if valuation_data.empty:
-            continue
-        if valuation_data['market_cap'][0] < 70 or valuation_data['circulating_market_cap'][0] > 520:
-            continue
-
-        if rise_low_volume(stock):
-            continue
-
-        candidates.append(stock)
-    return candidates
-
-
 def buy(context):
     qualified_stocks = []
     gk_stocks = []
     dk_stocks = []
-    rzq_stocks = []
 
     current_data = get_current_data()
     date_now = context.current_dt.strftime('%Y-%m-%d')
@@ -181,17 +121,15 @@ def buy(context):
 
     gk_stocks = filter_gap_up_by_auction(g.pre_gap_up, current_data, date_now)
     dk_stocks = filter_gap_down_by_open(g.pre_gap_down, current_data, previous_date)
-    rzq_stocks = filter_reversal_by_auction(g.pre_reversal, current_data, date_now)
-    strategy_by_stock = build_strategy_map(gk_stocks, dk_stocks, rzq_stocks)
+    gk_stocks, dk_stocks = apply_exclusive_priority(gk_stocks, dk_stocks)
+    strategy_by_stock = build_strategy_map(gk_stocks, dk_stocks)
     qualified_stocks.extend(gk_stocks)
     qualified_stocks.extend(dk_stocks)
-    qualified_stocks.extend(rzq_stocks)
 
     log_auction_summary(
         context.current_dt,
         gk_stocks,
         dk_stocks,
-        rzq_stocks,
     )
 
     if qualified_stocks:
@@ -220,12 +158,17 @@ def buy(context):
             print('———————————————————————————————————')
 
 
-def build_strategy_map(gap_up_selected, gap_down_selected, reversal_selected):
+def apply_exclusive_priority(gap_up_selected, gap_down_selected):
+    if gap_up_selected:
+        return gap_up_selected, []
+    return [], gap_down_selected
+
+
+def build_strategy_map(gap_up_selected, gap_down_selected):
     strategy_by_stock = {}
     for strategy, stock_list in [
         ('一进二', gap_up_selected),
         ('低开', gap_down_selected),
-        ('弱转强', reversal_selected),
     ]:
         for stock in stock_list:
             if stock not in strategy_by_stock:
@@ -306,33 +249,7 @@ def filter_gap_down_by_open(stock_list, current_data, previous_date):
     return selected
 
 
-def filter_reversal_by_auction(stock_list, current_data, date_now):
-    selected = []
-    for stock in stock_list:
-        prev_day_data = attribute_history(stock, 1, '1d', fields=['volume'], skip_paused=True)
-        if prev_day_data.empty or prev_day_data['volume'][0] <= 0:
-            continue
-
-        auction_data = get_call_auction(
-            stock, start_date=date_now, end_date=date_now, fields=['time', 'volume', 'current']
-        )
-        if auction_data.empty:
-            continue
-        if auction_data['volume'][0] / prev_day_data['volume'][0] < 0.03:
-            continue
-
-        high_limit = current_data[stock].high_limit
-        if high_limit <= 0:
-            continue
-        current_ratio = auction_data['current'][0] / (high_limit / 1.1)
-        if current_ratio <= 0.98 or current_ratio >= 1.09:
-            continue
-
-        selected.append(stock)
-    return selected
-
-
-def log_preselection_summary(current_dt, hl0_count, hl1_count, hl2_count, gap_up_count, gap_down_count, reversal_count):
+def log_preselection_summary(current_dt, hl0_count, hl1_count, hl2_count, gap_up_count, gap_down_count):
     lines = [
         '%s 选股开始, T涨停%s只，T-1曾涨停%s只，T-2曾涨停%s只。'
         % (format_log_date(current_dt), hl0_count, hl1_count, hl2_count),
@@ -340,19 +257,17 @@ def log_preselection_summary(current_dt, hl0_count, hl1_count, hl2_count, gap_up
         '初选：',
         '一进二 %s只' % gap_up_count,
         '低开 %s只' % gap_down_count,
-        '弱转强 %s只' % reversal_count,
         '',
     ]
     log_multiline(lines)
 
 
-def log_auction_summary(current_dt, gap_up_selected, gap_down_selected, reversal_selected):
-    total_count = len(gap_up_selected + gap_down_selected + reversal_selected)
+def log_auction_summary(current_dt, gap_up_selected, gap_down_selected):
+    total_count = len(gap_up_selected + gap_down_selected)
     lines = [
         '%s 集合竞价共选中%s只，如下：' % (format_log_date(current_dt), total_count),
         '一进二：%s只，%s' % (len(gap_up_selected), gap_up_selected),
         '低开：%s只，%s' % (len(gap_down_selected), gap_down_selected),
-        '弱转强：%s只，%s' % (len(reversal_selected), reversal_selected),
         '',
     ]
     log_multiline(lines)
