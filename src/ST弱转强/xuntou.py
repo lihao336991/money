@@ -7,6 +7,7 @@ import time
 import uuid
 import requests
 import json
+from decimal import Decimal, ROUND_HALF_UP
 
 # 全局状态存储器
 class G():pass
@@ -15,6 +16,9 @@ g.stock_num = 4
 g.max_mount = 150000 # 最大单票买入额，防止账户资金被超买
 
 g.black_list = ['600200']  #黑名单股票代码，在其中的过滤掉
+
+def round_price(value):
+    return float(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
 # 配置列表（注意不要删除，注释掉改为自己的就好）
 # 学鸿的账户
@@ -383,7 +387,9 @@ def filter_stocks(ContextInfo, stocks):
                     continue
                 
                 df['prev_close'] = df['close'].shift(1)  # 前一交易日收盘价
-                df['calculated_low_limit'] = round(df['prev_close'] * 0.95, 2)  # 计算跌停价
+                df['calculated_low_limit'] = df['prev_close'].apply(
+                    lambda prev_close: get_limit_of_stock(prev_close)[1] if pd.notnull(prev_close) else np.nan
+                )  # 计算跌停价
                 
             except Exception as e:
                 print(f"【技术指标筛选】{code} 时间转换失败：{e}，跳过该股票")
@@ -659,9 +665,10 @@ def codeOfPosition(position):
 
 # 根据股票代码和收盘价，计算次日涨跌停价格
 def get_limit_of_stock(last_close):
+    base_close = Decimal(str(last_close)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     return [
-        round(last_close * 1.05, 2), 
-        round(last_close * 0.95, 2)
+        round_price(base_close * Decimal('1.05')),
+        round_price(base_close * Decimal('0.95'))
     ]
 
 # 买入函数

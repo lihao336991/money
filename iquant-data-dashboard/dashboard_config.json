@@ -1,0 +1,98 @@
+{
+  "title": "iQuant 数据完整度大盘",
+  "default_days": 60,
+  "default_universe": "a_share",
+  "default_data_type": "daily_1d",
+  "universes": [
+    {
+      "key": "a_share",
+      "name": "沪深A股",
+      "type": "sector",
+      "sector_names": ["沪深A股", "上证A股", "深证A股"],
+      "fallback_codes": ["600000.SH", "600519.SH", "000001.SZ", "000333.SZ", "300750.SZ", "688981.SH"]
+    },
+    {
+      "key": "sh_a",
+      "name": "上证A股",
+      "type": "sector",
+      "sector_names": ["上证A股"],
+      "fallback_codes": ["600000.SH", "600519.SH", "601318.SH", "688981.SH"]
+    },
+    {
+      "key": "sz_a",
+      "name": "深证A股",
+      "type": "sector",
+      "sector_names": ["深证A股"],
+      "fallback_codes": ["000001.SZ", "000333.SZ", "002415.SZ", "300750.SZ"]
+    },
+    {
+      "key": "smallcap",
+      "name": "中小综指",
+      "type": "sector",
+      "sector_names": ["中小综指"],
+      "fallback_codes": ["002001.SZ", "002027.SZ", "002142.SZ", "002230.SZ", "002415.SZ", "002594.SZ"]
+    },
+    {
+      "key": "etf",
+      "name": "常用ETF",
+      "type": "codes",
+      "codes": [
+        "513100.SH",
+        "513520.SH",
+        "513030.SH",
+        "518880.SH",
+        "159980.SZ",
+        "159985.SZ",
+        "501018.SH",
+        "513130.SH",
+        "510180.SH",
+        "159915.SZ",
+        "588120.SH",
+        "512290.SH",
+        "515070.SH",
+        "159851.SZ",
+        "159637.SZ",
+        "159550.SZ",
+        "512710.SH",
+        "159692.SZ",
+        "515220.SH",
+        "562500.SH"
+      ]
+    },
+    {
+      "key": "indices",
+      "name": "核心指数",
+      "type": "codes",
+      "codes": ["000001.SH", "399001.SZ", "399006.SZ", "000300.SH", "000905.SH", "000852.SH", "399101.SZ"]
+    }
+  ],
+  "data_types": [
+    {
+      "key": "daily_1d",
+      "name": "日线K线",
+      "category": "market",
+      "period": "1d",
+      "fields": ["open", "high", "low", "close", "volume", "amount"]
+    },
+    {
+      "key": "minute_1m",
+      "name": "1分钟K线",
+      "category": "market",
+      "period": "1m",
+      "fields": ["open", "high", "low", "close", "volume", "amount"]
+    },
+    {
+      "key": "minute_5m",
+      "name": "5分钟K线",
+      "category": "market",
+      "period": "5m",
+      "fields": ["open", "high", "low", "close", "volume", "amount"]
+    },
+    {
+      "key": "financial",
+      "name": "财务数据",
+      "category": "financial",
+      "report_dates": ["0331", "0630", "0930", "1231"]
+    }
+  ]
+}

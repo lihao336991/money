@@ -1,4 +1,4 @@
-#coding:utf-8
+#coding:gbk
 """
 单纯一进二策略 - 迅投平台版
 克隆自聚宽文章：https://www.joinquant.com/post/66882
@@ -20,6 +20,7 @@ import datetime
 import math
 import time
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
 
 import numpy as np
 import pandas as pd
@@ -40,6 +41,28 @@ g.gap_down = []
 g.reversal = []
 g.prev_day_bar_cache = {}
 g.prev_day_bar_cache_date = None
+
+
+def diag_code(stock):
+    return stock.replace('.XSHG', '.SH').replace('.XSHE', '.SZ')
+
+
+def diag_codes(stock_list):
+    return '[' + ','.join(sorted(diag_code(stock) for stock in stock_list)) + ']'
+
+
+def diag_log_list(date, label, stock_list):
+    print(f"【排查】{date}|{label}|count={len(stock_list)}|codes={diag_codes(stock_list)}")
+
+
+def diag_num(value):
+    try:
+        if pd.isnull(value):
+            return 'nan'
+    except Exception:
+        pass
+    return f"{float(value):.6f}"
+
 
 # 账户配置
 # MY_ACCOUNT = "19164901653"
@@ -177,19 +200,19 @@ def get_shifted_date(C, date, days, days_type='T'):
             base_date = datetime.datetime.strptime(date, "%Y%m%d")
         else:
             base_date = date
-        
+
         if days_type == 'N':
             shifted_date = base_date + datetime.timedelta(days=days)
             return shifted_date.strftime("%Y%m%d")
-        
+
         elif days_type == 'T':
             start_date = (base_date - datetime.timedelta(days=365)).strftime("%Y%m%d")
             end_date = (base_date + datetime.timedelta(abs(days) + 365)).strftime("%Y%m%d")
             trade_days = C.get_trading_dates(stockcode='SH', start_date=start_date, end_date=end_date, count=1000, period='1d')
-            
+
             if not trade_days:
                 return (base_date + datetime.timedelta(days=days)).strftime("%Y%m%d")
-            
+
             date_str = base_date.strftime("%Y%m%d")
             if date_str in trade_days:
                 index = trade_days.index(date_str)
@@ -205,7 +228,7 @@ def get_shifted_date(C, date, days, days_type='T'):
                         break
                 if not found:
                     return (base_date + datetime.timedelta(days=days)).strftime("%Y%m%d")
-            
+
             new_index = index + days
             new_index = max(0, min(new_index, len(trade_days) - 1))
             return trade_days[new_index]
@@ -248,13 +271,20 @@ def codeOfPosition(position):
     """从持仓对象获取股票代码"""
     return position.m_strInstrumentID + '.' + position.m_strExchangeID
 
+def round_price(value):
+    return float(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
+
 def get_limit_of_stock(stock_code, last_close):
     """获取股票涨跌停价格"""
+    # iQuant returns prices as float; normalize stock prices to the 0.01 tick
+    # before calculating limits to avoid artifacts like 49.349999999999994.
+    base_close = Decimal(str(last_close)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     if str(stock_code).startswith(tuple(['3', '688'])):
-        return [round(last_close * 1.2, 2), round(last_close * 0.8, 2)]
-    return [round(last_close * 1.1, 2), round(last_close * 0.9, 2)]
+        return [round_price(base_close * Decimal('1.2')), round_price(base_close * Decimal('0.8'))]
+    return [round_price(base_close * Decimal('1.1')), round_price(base_close * Decimal('0.9'))]
 
-def get_account_money(C):        
+def get_account_money(C):
     """获取账户可用资金"""
     accounts = get_trade_detail_data(C.account, 'stock', 'account')
     for dt in accounts:
@@ -338,23 +368,23 @@ def filter_st_paused_stock(C, initial_list):
     name_none_count = 0
     st_count = 0
     paused_count = 0
-    
+
     st_keywords = ('ST', '*', '退')
-    
+
     # 尝试获取ST板块，作为双重过滤参考
     # st_sector = C.get_stock_list_in_sector('风险警示板') # 部分券商支持
     # st_sector = set(st_sector) if st_sector else set()
-    
+
     print(f"【过滤ST停牌】开始处理 {len(initial_list)} 只股票...")
-    
+
     temp_results = []
-    
+
     for stock in initial_list:
         try:
             # 获取股票名称
             name = C.get_stock_name(stock)
             is_st = False
-            
+
             if name is None:
                 name_none_count += 1
                 # 如果获取不到名字，保守起见不作为ST过滤，但在日志中标记
@@ -374,15 +404,15 @@ def filter_st_paused_stock(C, initial_list):
             except Exception:
                 # 获取停牌状态失败，默认不停牌
                 pass
-            
+
             temp_results.append((stock, is_st, is_paused))
-                
+
         except Exception as e:
             error_count += 1
             if error_count <= 5:
                 print(f"【过滤ST停牌】{stock} 异常: {e}")
             pass
-    
+
     # 检查停牌异常（早盘集合竞价期间可能全部返回True）
     ignore_paused = False
     if len(initial_list) > 100 and paused_count / len(initial_list) > 0.8:
@@ -395,9 +425,9 @@ def filter_st_paused_stock(C, initial_list):
         if is_paused and not ignore_paused:
             continue
         result.append(stock)
-            
+
     print(f"【过滤ST停牌】完成。ST: {st_count}, 停牌: {paused_count}, 名字缺失: {name_none_count}, 异常: {error_count}, 是否忽略停牌: {ignore_paused}")
-    
+
     # 兜底逻辑：如果过滤后数量极少（<10）且原本数量很多（>100），可能是数据异常导致全部被杀
     if len(result) < 10 and len(initial_list) > 100:
         print(f"【严重警告】过滤后股票仅剩 {len(result)} 只！可能是数据源问题（如名字全部获取失败）。")
@@ -406,21 +436,21 @@ def filter_st_paused_stock(C, initial_list):
             # 在这种情况下，可以考虑不过滤ST，仅保留能获取到的股票
             # 或者直接返回 initial_list (不推荐，可能会买入ST)
             # 这里我们不自动恢复，因为买入ST风险很大，但至少日志清晰了。
-            
+
     return result
 
 def filter_kcbj_stock(stock_list):
     """过滤科创板和北交所"""
     return [stock for stock in stock_list if stock[:2] in (('60','00','30'))]
 
-def prepare_stock_list(C, date): 
+def prepare_stock_list(C, date):
     """准备初始股票池"""
     # if g.cached_stock_list is not None and g.cached_stock_list_date == date:
     #     return g.cached_stock_list
-    
+
     initial_list = C.get_stock_list_in_sector('沪深A股')
     print(f"【选股】沪深A股总数: {len(initial_list)}")
-    
+
     if len(initial_list) < 100:
         print("【选股】'沪深A股'返回数量过少，尝试合并 '上证A股' 和 '深证A股'")
         try:
@@ -433,13 +463,14 @@ def prepare_stock_list(C, date):
 
     initial_list = filter_kcbj_stock(initial_list)
     print(f"【选股】过滤科创北交后: {len(initial_list)}")
-    
+
     initial_list = filter_new_stock(C, initial_list, date)
     print(f"【选股】过滤新股后: {len(initial_list)}")
-    
+
     initial_list = filter_st_paused_stock(C, initial_list)
     print(f"【选股】过滤ST停牌后: {len(initial_list)}")
-    
+    print(f"【排查】{date}|股票池_最终|count={len(initial_list)}")
+
     g.cached_stock_list = initial_list
     g.cached_stock_list_date = date
     return initial_list
@@ -459,11 +490,11 @@ def rise_low_volume(C, s, date):
         )
         if s not in data or len(data[s]) < 106:
             return False
-        
+
         df = data[s]
         high_prices = df['high'].values[:102]
         prev_high = high_prices[-1]
-        
+
         # 计算左压天数
         # 寻找最近一个大于等于prev_high的索引（倒序查找）
         # high_prices[-3::-1] 对应 聚宽 high_prices[-3::-1]
@@ -474,30 +505,30 @@ def rise_low_volume(C, s, date):
         # 聚宽逻辑: enumerate(high_prices[-3::-1], 2). high_prices[-3] is index 99.
         # If match at index i (0-based in slice), real index is 99-i.
         # Distance from end (101) is 101 - (99-i) = 2 + i. So enumerate starts at 2.
-        
+
         # Python list slice logic:
         # high_prices = [0...101] (len 102)
         # prev_high = high_prices[101]
         # Check high_prices[99], [98], ...
-        
+
         for i, high in enumerate(high_prices[-3::-1], 2):
             if high >= prev_high:
                 zyts_0 = i - 1
                 break
-        
+
         zyts = zyts_0 + 5
-        
+
         threshold = 0.9
-        
+
         # 判断当前成交量是否低于历史最大成交量的阈值
         # 聚宽: hist['volume'][-1] <= max(hist['volume'][-zyts:-1]) * threshold
         # QMT: df['volume'] includes today (index -1 is yesterday relative to strategy run time)
         # We need to check history window [-zyts : -1]
-        
+
         volume_slice = df['volume'].iloc[-zyts:-1].values
         if len(volume_slice) == 0:
             return False
-            
+
         if df['volume'].iloc[-1] <= np.max(volume_slice) * threshold:
             return True
         return False
@@ -516,14 +547,14 @@ def get_high_limit_factor(C, stocks_list, date, count=0, high_limit_factor=0):
     # 获取当日涨停股票
     # 批量获取数据
     # 需要获取 close 和 last_close (通过 count=2 获取 close of T and T-1)
-    
+
     # 注意：date是字符串 YYYYMMDD
     try:
         data = C.get_market_data_ex(
             ['close'], stocks_list, period="1d", start_time='', end_time=date,
             count=2, dividend_type="follow", fill_data=False, subscribe=False
         )
-        
+
         limit_up_stocks = []
         for s in data:
             df = data[s]
@@ -534,19 +565,19 @@ def get_high_limit_factor(C, stocks_list, date, count=0, high_limit_factor=0):
             high_limit = get_limit_of_stock(s, last_close)[0]
             if round(close, 2) >= round(high_limit, 2):
                 limit_up_stocks.append(s)
-                
+
         # 终止条件：无涨停或递归超过3次
         if not limit_up_stocks or count > 2:
             return math.log(high_limit_factor) if high_limit_factor > 0 else 0
-        
+
         # 递归计算前日数据
         last_day = get_shifted_date(C, date, -1, 'T')
-        
+
         # 加权计算情绪因子（指数衰减加权）
         high_limit_factor += (2 ** count) * (len(limit_up_stocks) ** 2) / temp_num
-        
+
         return get_high_limit_factor(C, limit_up_stocks, last_day, count + 1, high_limit_factor)
-        
+
     except Exception as e:
         print(f"【情绪因子】计算异常: {e}")
         return 0
@@ -554,26 +585,26 @@ def get_high_limit_factor(C, stocks_list, date, count=0, high_limit_factor=0):
 def get_priority_list(C, hl_list, date):
     """输出作为优先买入股票"""
     qualified_stocks = []
-    
+
     print(f"【选股】开始筛选优先买入股票，候选池 {len(hl_list)} 只")
-    
+
     # 批量获取前一日数据
     # 需要: close, volume, amount
     data = C.get_market_data_ex(
         ['close', 'volume', 'amount'], hl_list, period="1d", start_time='', end_time=date,
         count=1, dividend_type="follow", fill_data=False, subscribe=False
     )
-    
+
     # 批量获取财务数据
     # turnover_ratio (换手率), market_cap (市值), circulating_market_cap (流通市值)
-    # QMT get_valuation 对应 get_raw_financial_data? 
+    # QMT get_valuation 对应 get_raw_financial_data?
     # QMT没有直接的turnover_ratio历史数据接口，需要计算或查表
     # 聚宽: get_valuation fields=['turnover_ratio', 'market_cap','circulating_market_cap']
     # QMT: 股本表.总股本, 股本表.流通股本. 市值 = close * 总股本.
-    
+
     try:
         financial_data = C.get_raw_financial_data(
-            ['股本表.总股本', '股本表.流通股本'], hl_list, 
+            ['股本表.总股本', '股本表.流通股本'], hl_list,
             get_shifted_date(C, date, -365, 'T'), date
         )
     except Exception as e:
@@ -584,30 +615,32 @@ def get_priority_list(C, hl_list, date):
         if s not in data or data[s].empty:
             print(f"【对比日志】过滤 {s}: 无前一日数据")
             continue
-            
+
         df = data[s]
         close = df['close'].iloc[0]
         volume = df['volume'].iloc[0] * 100
         amount = df['amount'].iloc[0]
-        
+
         # 计算均价涨幅
         # 聚宽: prev_day_data['money'][0] / prev_day_data['volume'][0] / prev_day_data['close'][0] * 1.1 - 1
         if volume == 0 or close == 0:
             print(f"【对比日志】过滤 {s}: 成交量或收盘价为0")
+            print(f"【排查】{date}|一进二_过滤|code={diag_code(s)}|reason=量价异常|close={diag_num(close)}|volume={diag_num(volume)}|amount={diag_num(amount)}")
             continue
-            
+
         avg_price_increase_value = amount / volume / close * 1.1 - 1
-        
+
         # 筛选涨幅在7%以上且成交额在5.5亿到20亿之间的股票
         if avg_price_increase_value < 0.07 or amount < 5.5e8 or amount > 20e8:
             print(f"【对比日志】过滤 {s}: 涨幅/成交额不符 (涨幅={avg_price_increase_value}, 成交额={amount/1e8:.2f}亿)")
             print(amount, volume, close)
+            print(f"【排查】{date}|一进二_过滤|code={diag_code(s)}|reason=涨幅成交额不符|avg_inc={diag_num(avg_price_increase_value)}|amount={diag_num(amount)}|volume={diag_num(volume)}|close={diag_num(close)}")
             continue
-            
+
         # 获取市值数据
         stock_num = 0
         circulating_stock_num = 0
-        
+
         if s in financial_data:
             try:
                 if '股本表.总股本' in financial_data[s]:
@@ -619,33 +652,37 @@ def get_priority_list(C, hl_list, date):
             except:
                 print(f"【对比日志】获取 {s} 财务数据异常")
                 pass
-        
+
         if stock_num == 0:
-            print(f"【对比日志】过滤 {s}: 总股本为0")            
-            
+            print(f"【对比日志】过滤 {s}: 总股本为0")
+            print(f"【排查】{date}|一进二_过滤|code={diag_code(s)}|reason=总股本为0|amount={diag_num(amount)}|volume={diag_num(volume)}|close={diag_num(close)}")
+
             continue
-            
+
         market_cap_val = close * stock_num / 1e8 # 亿
         circulating_market_cap_val = close * circulating_stock_num / 1e8 # 亿
-        
+
         # 对齐聚宽版：筛选市值在70亿以上且流通市值不超过520亿的股票
         # 注意：聚宽 market_cap 单位是亿元
         if market_cap_val < 70 or circulating_market_cap_val > 520:
             print(f"【对比日志】过滤 {s}: 市值不符 (总市值={market_cap_val:.2f}, 流通={circulating_market_cap_val:.2f})")
+            print(f"【排查】{date}|一进二_过滤|code={diag_code(s)}|reason=市值不符|market_cap={diag_num(market_cap_val)}|circulating_market_cap={diag_num(circulating_market_cap_val)}|stock_num={diag_num(stock_num)}|circulating_stock_num={diag_num(circulating_stock_num)}|close={diag_num(close)}")
             continue
-            
+
         # 检查是否有左压且成交量不足的情况
         if rise_low_volume(C, s, date):
             print(f"【对比日志】过滤 {s}: 左压缩量")
+            print(f"【排查】{date}|一进二_过滤|code={diag_code(s)}|reason=左压缩量")
             continue
-            
+
         # 将符合条件的股票和其实时数据一起存储
         qualified_stocks.append(s)
-        
+        print(f"【排查】{date}|一进二_通过|code={diag_code(s)}|avg_inc={diag_num(avg_price_increase_value)}|amount={diag_num(amount)}|volume={diag_num(volume)}|close={diag_num(close)}|market_cap={diag_num(market_cap_val)}|circulating_market_cap={diag_num(circulating_market_cap_val)}|stock_num={diag_num(stock_num)}|circulating_stock_num={diag_num(circulating_stock_num)}")
+
     log_msg = '一进二预选过滤后: ' + format_stock_list(C, qualified_stocks)
     print(log_msg)
     print(f"【对比日志】最终入选: {len(qualified_stocks)}, 列表: {qualified_stocks}")
-    
+
     return qualified_stocks
 
 def get_gap_down_priority_list(C, stock_list, date):
@@ -662,6 +699,7 @@ def get_gap_down_priority_list(C, stock_list, date):
     for s in stock_list:
         if s not in data or data[s].empty:
             print(f"【首板低开】过滤 {s}: 无历史数据")
+            print(f"【排查】{date}|低开_过滤|code={diag_code(s)}|reason=无相对位置数据")
             continue
 
         df = data[s]
@@ -671,14 +709,17 @@ def get_gap_down_priority_list(C, stock_list, date):
 
         if high_ <= low_:
             print(f"【首板低开】过滤 {s}: 区间高低点异常")
+            print(f"【排查】{date}|低开_过滤|code={diag_code(s)}|reason=区间高低点异常|high={diag_num(high_)}|low={diag_num(low_)}|close={diag_num(close_)}")
             continue
 
         rp = (close_ - low_) / (high_ - low_)
         if rp > 0.5:
             print(f"【首板低开】过滤 {s}: 相对位置过高 rp={rp:.4f}")
+            print(f"【排查】{date}|低开_过滤|code={diag_code(s)}|reason=相对位置过高|rp={diag_num(rp)}|high={diag_num(high_)}|low={diag_num(low_)}|close={diag_num(close_)}")
             continue
 
         qualified_stocks.append(s)
+        print(f"【排查】{date}|低开_通过|code={diag_code(s)}|rp={diag_num(rp)}|high={diag_num(high_)}|low={diag_num(low_)}|close={diag_num(close_)}")
 
     print(f"【首板低开】预筛选完成，剩余 {len(qualified_stocks)} 只")
     return qualified_stocks
@@ -706,17 +747,21 @@ def get_reversal_priority_list(C, stock_list, date):
     for s in stock_list:
         if s not in price_data or price_data[s].empty or len(price_data[s]) < 4:
             print(f"【弱转强】过滤 {s}: 历史K线不足")
+            rows = 0 if s not in price_data or price_data[s].empty else len(price_data[s])
+            print(f"【排查】{date}|弱转强_过滤|code={diag_code(s)}|reason=K线不足|rows={rows}")
             continue
 
         df = price_data[s]
         closes = df['close'].values
         if closes[0] == 0:
             print(f"【弱转强】过滤 {s}: 基准收盘价为0")
+            print(f"【排查】{date}|弱转强_过滤|code={diag_code(s)}|reason=基准收盘价为0")
             continue
 
         increase_ratio = (closes[-1] - closes[0]) / closes[0]
         if increase_ratio > 0.28:
             print(f"【弱转强】过滤 {s}: 近4日涨幅过高 {increase_ratio:.4f}")
+            print(f"【排查】{date}|弱转强_过滤|code={diag_code(s)}|reason=涨幅过高|increase_ratio={diag_num(increase_ratio)}")
             continue
 
         prev = df.iloc[-1]
@@ -727,20 +772,24 @@ def get_reversal_priority_list(C, stock_list, date):
 
         if prev_open == 0:
             print(f"【弱转强】过滤 {s}: 昨日开盘价为0")
+            print(f"【排查】{date}|弱转强_过滤|code={diag_code(s)}|reason=开盘异常|prev_open={diag_num(prev_open)}")
             continue
 
         open_close_ratio = (prev_close - prev_open) / prev_open
         if open_close_ratio < -0.05:
             print(f"【弱转强】过滤 {s}: 昨日收盘弱于开盘过多 {open_close_ratio:.4f}")
+            print(f"【排查】{date}|弱转强_过滤|code={diag_code(s)}|reason=收盘弱|open_close_ratio={diag_num(open_close_ratio)}|open={diag_num(prev_open)}|close={diag_num(prev_close)}")
             continue
 
         if prev_volume == 0 or prev_close == 0:
             print(f"【弱转强】过滤 {s}: 昨日量价异常")
+            print(f"【排查】{date}|弱转强_过滤|code={diag_code(s)}|reason=量价异常|close={diag_num(prev_close)}|volume={diag_num(prev_volume)}|amount={diag_num(prev_amount)}")
             continue
 
         avg_price_increase_value = prev_amount / prev_volume / prev_close - 1
         if avg_price_increase_value < -0.04 or prev_amount < 3e8 or prev_amount > 19e8:
             print(f"【弱转强】过滤 {s}: 均价涨幅/成交额不符 (涨幅={avg_price_increase_value:.4f}, 成交额={prev_amount / 1e8:.2f}亿)")
+            print(f"【排查】{date}|弱转强_过滤|code={diag_code(s)}|reason=涨幅成交额不符|avg_inc={diag_num(avg_price_increase_value)}|amount={diag_num(prev_amount)}|volume={diag_num(prev_volume)}|close={diag_num(prev_close)}")
             continue
 
         stock_num = 0
@@ -760,27 +809,39 @@ def get_reversal_priority_list(C, stock_list, date):
 
         if stock_num == 0:
             print(f"【弱转强】过滤 {s}: 无总股本数据")
+            print(f"【排查】{date}|弱转强_过滤|code={diag_code(s)}|reason=总股本为0|close={diag_num(prev_close)}")
             continue
 
         market_cap_val = prev_close * stock_num / 1e8
         circulating_market_cap_val = prev_close * circulating_stock_num / 1e8
         if market_cap_val < 70 or circulating_market_cap_val > 520:
             print(f"【弱转强】过滤 {s}: 市值不符 (总市值={market_cap_val:.2f}, 流通={circulating_market_cap_val:.2f})")
+            print(f"【排查】{date}|弱转强_过滤|code={diag_code(s)}|reason=市值不符|market_cap={diag_num(market_cap_val)}|circulating_market_cap={diag_num(circulating_market_cap_val)}|stock_num={diag_num(stock_num)}|circulating_stock_num={diag_num(circulating_stock_num)}|close={diag_num(prev_close)}")
             continue
 
         if rise_low_volume(C, s, date):
             print(f"【弱转强】过滤 {s}: 左压缩量")
+            print(f"【排查】{date}|弱转强_过滤|code={diag_code(s)}|reason=左压缩量")
             continue
 
         qualified_stocks.append(s)
+        print(f"【排查】{date}|弱转强_通过|code={diag_code(s)}|increase_ratio={diag_num(increase_ratio)}|open_close_ratio={diag_num(open_close_ratio)}|avg_inc={diag_num(avg_price_increase_value)}|amount={diag_num(prev_amount)}|volume={diag_num(prev_volume)}|close={diag_num(prev_close)}|market_cap={diag_num(market_cap_val)}|circulating_market_cap={diag_num(circulating_market_cap_val)}|stock_num={diag_num(stock_num)}|circulating_stock_num={diag_num(circulating_stock_num)}")
 
     print(f"【弱转强】预筛选完成，剩余 {len(qualified_stocks)} 只")
     return qualified_stocks
 
-def get_stock_list_func(C): 
+def get_stock_list_func(C):
     """
     选股逻辑：筛选"一进二"模式的股票
     """
+    # ============================== 开始新交易日 ==============================
+    today_str = datetime.datetime.now().strftime('%Y-%m-%d')
+    separator = '=' * 80
+    print(separator)
+    print('【新交易日】%s' % today_str)
+    print(separator)
+    # =========================================================================
+
     _, fallback_yesterday = ensure_context_dates(C)
     # 动态确定基准日期 T
     if C.do_back_test:
@@ -789,7 +850,7 @@ def get_stock_list_func(C):
         # 实盘模式：根据当前时间判断
         now = datetime.datetime.now()
         today_str = now.strftime("%Y%m%d")
-        
+
         # 判断当前时间是否在收盘后 (15:00 后)
         if now.hour >= 15:
             # 收盘后预演，以今天为 T 日
@@ -805,19 +866,20 @@ def get_stock_list_func(C):
     # 获取前3个交易日日期
     date_1 = get_shifted_date(C, date, -1, 'T') # T-1
     date_2 = get_shifted_date(C, date, -2, 'T') # T-2
-    
+
     print(f"【选股】日期: T={date}, T-1={date_1}, T-2={date_2}")
+    print(f"【排查】交易日|run_date={today_str}|T={date}|T_1={date_1}|T_2={date_2}")
 
     # 准备初始股票池
     initial_list = prepare_stock_list(C, date)
     print(f"【对比日志】日期: {date}, 初始池: {len(initial_list)}")
-    
+
     # 批量获取数据用于判断涨停
     # 我们需要 T, T-1, T-2 的涨停情况
     # T日涨停: Close(T) == Limit(T)
     # T-1日涨停: Close(T-1) == Limit(T-1)
     # T-2日涨停: Close(T-2) == Limit(T-2)
-    
+
     # 批量获取最近3天数据 (T, T-1, T-2) + T-3 (for Limit calculation of T-2)
     # count=4: T, T-1, T-2, T-3
     data = C.get_market_data_ex(
@@ -831,67 +893,86 @@ def get_stock_list_func(C):
     #         print(f"{s} 数据: {data[s].tail()}")
     #     else:
     #         print(f"{s} 无数据")
-    
+
     hl0_list = [] # T日涨停
     hl1_list = [] # T-1曾涨停 (聚宽原代码 get_ever_hl_stock 是 "曾" 触及涨停)
     hl2_list = [] # T-2曾涨停
     hl0_ever_list = []
     hl_close_T_1_list = []
-    
+
+    missing_daily_count = 0
     for s in initial_list:
         if s not in data or len(data[s]) < 4:
+            missing_daily_count += 1
             continue
-        
+
         closes = data[s]['close'].values
         highs = data[s]['high'].values
-        
+
         # Data structure: [T-3, T-2, T-1, T]
         # Limit(T) needs Close(T-1)
         # Limit(T-1) needs Close(T-2)
         # Limit(T-2) needs Close(T-3)
-        
+
         # T日涨停 (收盘价)
         limit_T = get_limit_of_stock(s, closes[-2])[0]
         if round(closes[-1], 2) == round(limit_T, 2):
             hl0_list.append(s)
+            print(f"【排查】{date}|涨停识别_T收盘|code={diag_code(s)}|close={diag_num(closes[-1])}|high={diag_num(highs[-1])}|limit={diag_num(limit_T)}|prev_close={diag_num(closes[-2])}")
         if round(highs[-1], 2) == round(limit_T, 2) and round(closes[-1], 2) != round(limit_T, 2):
             hl0_ever_list.append(s)
-            
+            print(f"【排查】{date}|涨停识别_T曾涨停未封板|code={diag_code(s)}|close={diag_num(closes[-1])}|high={diag_num(highs[-1])}|limit={diag_num(limit_T)}|prev_close={diag_num(closes[-2])}")
+
         # T-1日曾涨停 (最高价)
         limit_T_1 = get_limit_of_stock(s, closes[-3])[0]
         if round(highs[-2], 2) == round(limit_T_1, 2):
             hl1_list.append(s)
+            print(f"【排查】{date_1}|涨停识别_T_1曾涨停|code={diag_code(s)}|close={diag_num(closes[-2])}|high={diag_num(highs[-2])}|limit={diag_num(limit_T_1)}|prev_close={diag_num(closes[-3])}")
         if round(closes[-2], 2) == round(limit_T_1, 2):
             hl_close_T_1_list.append(s)
-            
+            print(f"【排查】{date_1}|涨停识别_T_1收盘|code={diag_code(s)}|close={diag_num(closes[-2])}|high={diag_num(highs[-2])}|limit={diag_num(limit_T_1)}|prev_close={diag_num(closes[-3])}")
+
         # T-2日曾涨停 (最高价)
         limit_T_2 = get_limit_of_stock(s, closes[-4])[0]
         if round(highs[-3], 2) == round(limit_T_2, 2):
             hl2_list.append(s)
+            print(f"【排查】{date_2}|涨停识别_T_2曾涨停|code={diag_code(s)}|close={diag_num(closes[-3])}|high={diag_num(highs[-3])}|limit={diag_num(limit_T_2)}|prev_close={diag_num(closes[-4])}")
 
     # 合并前两日涨停股票为集合，用于快速查找
     elements_to_remove = set(hl1_list + hl2_list)
     # 筛选出昨日涨停但前两日未涨停的股票（"一进二"模式）
-    hl_list = [stock for stock in hl0_list if stock not in elements_to_remove]  
+    hl_list = [stock for stock in hl0_list if stock not in elements_to_remove]
 
     print(f"【对比日志】T涨停: {len(hl0_list)}, T-1曾涨停: {len(hl1_list)}, T-2曾涨停: {len(hl2_list)}")
+    print(f"【排查】{date}|日线数据不足|count={missing_daily_count}")
     print(f'hl0_list: {hl0_list}')
     print(f'hl1_list: {hl1_list}')
     print(f'hl2_list: {hl2_list}')
-    
+    diag_log_list(date, 'T涨停_收盘', hl0_list)
+    diag_log_list(date_1, 'T_1曾涨停_最高', hl1_list)
+    diag_log_list(date_2, 'T_2曾涨停_最高', hl2_list)
+    diag_log_list(date, 'T曾涨停未封板', hl0_ever_list)
+    diag_log_list(date_1, 'T_1涨停_收盘', hl_close_T_1_list)
+
     print(f"【对比日志】一进二初选: {len(hl_list)}, 列表: {hl_list}")
 
     gap_down_candidates = [s for s in hl0_list if s not in hl1_list]
     reversal_candidates = [s for s in hl0_ever_list if s not in set(hl_close_T_1_list)]
+    diag_log_list(date, '一进二_初选', hl_list)
+    diag_log_list(date, '低开_初选', gap_down_candidates)
+    diag_log_list(date, '弱转强_初选', reversal_candidates)
 
     send_selection_report(C, "【盘前初选】", date, hl_list, gap_down_candidates, reversal_candidates)
 
     g.gap_up = get_priority_list(C, hl_list, date)
     g.gap_down = get_gap_down_priority_list(C, gap_down_candidates, date)
     g.reversal = get_reversal_priority_list(C, reversal_candidates, date)
+    diag_log_list(date, '一进二_预选', g.gap_up)
+    diag_log_list(date, '低开_预选', g.gap_down)
+    diag_log_list(date, '弱转强_预选', g.reversal)
     cache_prev_day_bars(C, unique_stocks(g.gap_up, g.gap_down, g.reversal), date)
     send_selection_report(C, "【盘前预选】", date, g.gap_up, g.gap_down, g.reversal)
-    
+
 def buy_func(C):
     """
     买入逻辑：三策略合并买入
@@ -911,54 +992,71 @@ def buy_func(C):
     for s in g.gap_up:
         prev = get_prev_day_bar(C, s, C.yesterday)
         if not prev:
+            print(f"【排查】{date_now}|竞价一进二_过滤|code={diag_code(s)}|reason=昨日量价无数据")
             continue
         auc = auction_bars.get(s)
         if not auc:
+            print(f"【排查】{date_now}|竞价一进二_过滤|code={diag_code(s)}|reason=无当日开盘数据|prev_close={diag_num(prev.get('close'))}|prev_volume={diag_num(prev.get('volume'))}")
             continue
 
         if prev['volume'] <= 0 or auc['volume'] / prev['volume'] < 0.03:
+            volume_ratio = auc['volume'] / prev['volume'] if prev['volume'] else 0
+            print(f"【排查】{date_now}|竞价一进二_过滤|code={diag_code(s)}|reason=开盘量比不足|open={diag_num(auc['open'])}|open_volume={diag_num(auc['volume'])}|prev_close={diag_num(prev['close'])}|prev_volume={diag_num(prev['volume'])}|volume_ratio={diag_num(volume_ratio)}")
             continue
         current_ratio = auc['open'] / prev['close'] if prev['close'] else 0
         if current_ratio <= 1 or current_ratio >= 1.06:
+            print(f"【排查】{date_now}|竞价一进二_过滤|code={diag_code(s)}|reason=开盘涨幅不符|open={diag_num(auc['open'])}|prev_close={diag_num(prev['close'])}|price_ratio={diag_num(current_ratio)}|open_volume={diag_num(auc['volume'])}|prev_volume={diag_num(prev['volume'])}|volume_ratio={diag_num(auc['volume'] / prev['volume'])}")
             continue
 
         gk_stocks.append(s)
         final_candidates.append({'code': s, 'auction_price': auc['open'], 'tag': 'gk'})
+        print(f"【排查】{date_now}|竞价一进二_通过|code={diag_code(s)}|open={diag_num(auc['open'])}|prev_close={diag_num(prev['close'])}|price_ratio={diag_num(current_ratio)}|open_volume={diag_num(auc['volume'])}|prev_volume={diag_num(prev['volume'])}|volume_ratio={diag_num(auc['volume'] / prev['volume'])}|amount={diag_num(auc.get('amount', 0))}")
 
     if not gk_stocks and g.gap_down:
         auction_bars = get_today_auction_bars(C, g.gap_down, date_now)
         for s in g.gap_down:
             prev = get_prev_day_bar(C, s, C.yesterday)
             if not prev:
+                print(f"【排查】{date_now}|竞价低开_过滤|code={diag_code(s)}|reason=昨日量价无数据")
                 continue
             auc = auction_bars.get(s)
             if not auc:
+                print(f"【排查】{date_now}|竞价低开_过滤|code={diag_code(s)}|reason=无当日开盘数据|prev_close={diag_num(prev.get('close'))}|prev_amount={diag_num(prev.get('amount'))}")
                 continue
             open_pct = auc['open'] / prev['close'] if prev['close'] else 0
             if open_pct < 0.955 or open_pct > 0.97:
+                print(f"【排查】{date_now}|竞价低开_过滤|code={diag_code(s)}|reason=低开幅度不符|open={diag_num(auc['open'])}|prev_close={diag_num(prev['close'])}|open_pct={diag_num(open_pct)}")
                 continue
             if prev['amount'] < 1e8:
+                print(f"【排查】{date_now}|竞价低开_过滤|code={diag_code(s)}|reason=昨日成交额不足|open={diag_num(auc['open'])}|prev_close={diag_num(prev['close'])}|open_pct={diag_num(open_pct)}|prev_amount={diag_num(prev['amount'])}")
                 continue
             dk_stocks.append(s)
             final_candidates.append({'code': s, 'auction_price': auc['open'], 'tag': 'dk'})
+            print(f"【排查】{date_now}|竞价低开_通过|code={diag_code(s)}|open={diag_num(auc['open'])}|prev_close={diag_num(prev['close'])}|open_pct={diag_num(open_pct)}|prev_amount={diag_num(prev['amount'])}")
 
     if not gk_stocks and not dk_stocks:
         auction_bars = get_today_auction_bars(C, g.reversal, date_now)
         for s in g.reversal:
             prev = get_prev_day_bar(C, s, C.yesterday)
             if not prev:
+                print(f"【排查】{date_now}|竞价弱转强_过滤|code={diag_code(s)}|reason=昨日量价无数据")
                 continue
             auc = auction_bars.get(s)
             if not auc:
+                print(f"【排查】{date_now}|竞价弱转强_过滤|code={diag_code(s)}|reason=无当日开盘数据|prev_close={diag_num(prev.get('close'))}|prev_volume={diag_num(prev.get('volume'))}")
                 continue
             if prev['volume'] <= 0 or auc['volume'] / prev['volume'] < 0.03:
+                volume_ratio = auc['volume'] / prev['volume'] if prev['volume'] else 0
+                print(f"【排查】{date_now}|竞价弱转强_过滤|code={diag_code(s)}|reason=开盘量比不足|open={diag_num(auc['open'])}|open_volume={diag_num(auc['volume'])}|prev_close={diag_num(prev['close'])}|prev_volume={diag_num(prev['volume'])}|volume_ratio={diag_num(volume_ratio)}")
                 continue
             current_ratio = auc['open'] / prev['close'] if prev['close'] else 0
             if current_ratio <= 0.98 or current_ratio >= 1.09:
+                print(f"【排查】{date_now}|竞价弱转强_过滤|code={diag_code(s)}|reason=开盘涨幅不符|open={diag_num(auc['open'])}|prev_close={diag_num(prev['close'])}|price_ratio={diag_num(current_ratio)}|open_volume={diag_num(auc['volume'])}|prev_volume={diag_num(prev['volume'])}|volume_ratio={diag_num(auc['volume'] / prev['volume'])}")
                 continue
 
             rzq_stocks.append(s)
             final_candidates.append({'code': s, 'auction_price': auc['open'], 'tag': 'rzq'})
+            print(f"【排查】{date_now}|竞价弱转强_通过|code={diag_code(s)}|open={diag_num(auc['open'])}|prev_close={diag_num(prev['close'])}|price_ratio={diag_num(current_ratio)}|open_volume={diag_num(auc['volume'])}|prev_volume={diag_num(prev['volume'])}|volume_ratio={diag_num(auc['volume'] / prev['volume'])}|amount={diag_num(auc.get('amount', 0))}")
 
     send_selection_report(C, "【竞价最终】", date_now, gk_stocks, dk_stocks, rzq_stocks)
     print('一进二：' + ','.join(gk_stocks))
@@ -1000,21 +1098,21 @@ def sell_func(C):
         s = codeOfPosition(position)
         if position.m_nCanUseVolume <= 0:
             continue
-            
+
         # 获取当前价格和涨停价
         tick = C.get_market_data_ex(['close'], [s], period="1m", count=1, dividend_type="follow", fill_data=False, subscribe=True)
         if s not in tick or tick[s].empty:
             continue
         last_price = tick[s]['close'].iloc[0]
-        
+
         # 获取昨日收盘价计算涨停价
         day_data = C.get_market_data_ex(['close'], [s], period="1d", count=2, end_time=C.yesterday, dividend_type="follow", fill_data=False, subscribe=False)
         if s not in day_data or len(day_data[s]) < 1:
              continue
         last_close = day_data[s]['close'].iloc[-1]
-        
+
         high_limit = get_limit_of_stock(s, last_close)[0]
-        
+
         if round(last_price, 2) >= round(high_limit, 2):
             continue
 
@@ -1106,7 +1204,7 @@ def init(C):
     if not C.do_back_test and not is_trading(C.context):
         print('当前日期为周末，不执行任务')
         return
-    
+
     if C.do_back_test:
         C.runner.run_daily("09:16", get_stock_list_func)
         C.runner.run_daily("09:26", buy_func)
@@ -1122,7 +1220,7 @@ def init(C):
         C.run_time("sell_func", "1nDay", "2025-03-01 14:48:00", "SH")
         C.run_time("send_account_info_close_func", "1nDay", "2025-03-01 15:00:00", "SH")
 
-        
+
     print("【初始化】策略初始化完成")
 
 def handlebar(C):
@@ -1153,4 +1251,4 @@ def is_trading(context):
 
 def orderError_callback(context, orderArgs, errMsg):
     messager.send_message(f"下单异常回调，订单信息{orderArgs}，异常信息{errMsg}")
-    
+

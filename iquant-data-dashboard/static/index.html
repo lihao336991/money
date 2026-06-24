@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>iQuant 数据完整度大盘</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Local iQuant Coverage Monitor</p>
+          <h1>iQuant 数据完整度大盘</h1>
+        </div>
+        <div class="actions">
+          <button id="refreshBtn" class="primary" type="button">刷新扫描</button>
+          <a id="exportLink" class="secondary" href="/api/export.csv">导出 CSV</a>
+        </div>
+      </header>
+
+      <section class="status-line" id="statusLine">
+        <span>等待扫描</span>
+      </section>
+
+      <section class="toolbar" aria-label="扫描条件">
+        <label>
+          开始日期
+          <input id="startDate" type="date" />
+        </label>
+        <label>
+          结束日期
+          <input id="endDate" type="date" />
+        </label>
+        <label>
+          基准池
+          <select id="universeSelect"></select>
+        </label>
+        <label>
+          数据类型
+          <select id="dataTypeSelect"></select>
+        </label>
+      </section>
+
+      <section class="metrics" aria-label="数据概览">
+        <article class="metric">
+          <span>覆盖率</span>
+          <strong id="metricCoverage">--</strong>
+        </article>
+        <article class="metric">
+          <span>基准标的数</span>
+          <strong id="metricTotal">--</strong>
+        </article>
+        <article class="metric">
+          <span>检查日期数</span>
+          <strong id="metricDates">--</strong>
+        </article>
+        <article class="metric">
+          <span>问题标的数</span>
+          <strong id="metricProblem">--</strong>
+        </article>
+      </section>
+
+      <section class="chart-grid">
+        <div class="panel coverage-panel">
+          <div class="panel-head">
+            <div>
+              <h2>覆盖率折线</h2>
+              <span id="chartSubtitle">--</span>
+            </div>
+            <div class="legend">
+              <span><i class="legend-good"></i>100%</span>
+              <span><i class="legend-warn"></i>缺口</span>
+              <span><i class="legend-bad"></i>严重</span>
+            </div>
+          </div>
+          <div id="lineChart" class="line-chart"></div>
+        </div>
+
+        <div class="panel worst-panel">
+          <div class="panel-head">
+            <h2>低覆盖日期</h2>
+          </div>
+          <div id="worstDates" class="worst-list"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>日期热力图</h2>
+            <span id="dateRange">--</span>
+          </div>
+        </div>
+        <div id="heatmap" class="heatmap" aria-label="每日覆盖率热力图"></div>
+      </section>
+
+      <section class="table-panel">
+        <div class="panel-head">
+          <h2>标的明细</h2>
+          <div class="table-tools">
+            <select id="statusSelect">
+              <option value="">全部状态</option>
+              <option value="ok">全覆盖</option>
+              <option value="partial">部分缺失</option>
+              <option value="stale">尾部缺失</option>
+              <option value="missing">完全缺失</option>
+            </select>
+            <input id="searchInput" type="search" placeholder="搜索代码" />
+            <span id="rowCount">--</span>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>代码</th>
+                <th>状态</th>
+                <th>覆盖率</th>
+                <th>首个日期</th>
+                <th>最新日期</th>
+                <th>缺失数</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody id="rowsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside id="detailPanel" class="detail-panel" aria-live="polite">
+        <div class="panel-head">
+          <h2>缺口详情</h2>
+          <button id="closeDetail" class="icon-button" type="button" title="关闭">×</button>
+        </div>
+        <div id="detailContent" class="detail-content">
+          <p class="muted">从表格选择一个标的查看缺失日期。</p>
+        </div>
+      </aside>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

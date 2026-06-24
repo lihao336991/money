@@ -6,6 +6,7 @@
 
 from typing import Any, List, Dict, Optional
 from datetime import datetime, timedelta, time
+from decimal import Decimal, ROUND_HALF_UP
 import numpy as np
 import pandas as pd
 import requests
@@ -151,6 +152,9 @@ class Log:
         print('[log error]', *args)
 log = Log()
 
+def round_price(value):
+    return float(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
 class TradingStrategy:
     """
     交易策略类
@@ -215,9 +219,10 @@ class TradingStrategy:
 
     # 根据股票代码和收盘价，计算次日涨跌停价格
     def get_limit_of_stock(self, stock_code, last_close):
+        base_close = Decimal(str(last_close)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
         if str(stock_code).startswith(tuple(['3', '688'])):
-            return [round(last_close * 1.2, 2), round(last_close * 0.8, 2)]
-        return [round(last_close * 1.1, 2), round(last_close * 0.9, 2)]
+            return [round_price(base_close * Decimal('1.2')), round_price(base_close * Decimal('0.8'))]
+        return [round_price(base_close * Decimal('1.1')), round_price(base_close * Decimal('0.9'))]
     # 根据股票代码，查询公司总市值
     def get_market_cup(self, context, code):
         data = context.get_instrumentdetail(code)

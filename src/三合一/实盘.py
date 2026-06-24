@@ -20,6 +20,7 @@ import datetime
 import math
 import time
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
 
 import numpy as np
 import pandas as pd
@@ -125,11 +126,15 @@ def codeOfPosition(position):
     """从持仓对象获取股票代码"""
     return position.m_strInstrumentID + '.' + position.m_strExchangeID
 
+def round_price(value):
+    return float(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
 def get_limit_of_stock(stock_code, last_close):
     """获取股票涨跌停价格"""
+    base_close = Decimal(str(last_close)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
     if str(stock_code).startswith(tuple(['3', '688'])):
-        return [round(last_close * 1.2, 2), round(last_close * 0.8, 2)]
-    return [round(last_close * 1.1, 2), round(last_close * 0.9, 2)]
+        return [round_price(base_close * Decimal('1.2')), round_price(base_close * Decimal('0.8'))]
+    return [round_price(base_close * Decimal('1.1')), round_price(base_close * Decimal('0.9'))]
 
 def get_account_money(C):        
     """获取账户可用资金"""

@@ -7,6 +7,7 @@
 import json
 import time as nativeTime
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, time, timedelta
 from typing import Any, List
 
@@ -28,6 +29,8 @@ g.window = 7                # 监控基差 7日窗口
 # 黑名单列表 (支持部分匹配，如 '688' 会过滤所有688开头的股票)
 g.blacklist = ['002694']
 
+def round_price(value):
+    return float(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
 def init(context: Any):
     # 初始化策略环境及参数
@@ -177,9 +180,10 @@ class TradingStrategy:
 
     # 根据股票代码和收盘价，计算次日涨跌停价格
     def get_limit_of_stock(self, stock_code, last_close):
+        base_close = Decimal(str(last_close)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
         if str(stock_code).startswith(tuple(['3', '688'])):
-            return [round(last_close * 1.2, 2), round(last_close * 0.8, 2)]
-        return [round(last_close * 1.1, 2), round(last_close * 0.9, 2)]
+            return [round_price(base_close * Decimal('1.2')), round_price(base_close * Decimal('0.8'))]
+        return [round_price(base_close * Decimal('1.1')), round_price(base_close * Decimal('0.9'))]
     
     # 根据股票代码，查询公司总市值
     def get_market_cup(self, context, code):
